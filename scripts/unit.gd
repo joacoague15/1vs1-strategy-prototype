@@ -9,9 +9,10 @@ var current_hp: float = 100.0
 var damage: float = 10.0
 var fire_rate: float = 1.0
 var attack_range: float = 200.0
-var move_speed: float = 80.0
+var move_speed: float = 56.0
 var fire_cooldown: float = 0.0
 var target: Node2D = null
+var attacking: bool = false  # ponytail: red units idle until lane launched
 var unit_cost: int = 50
 var armor_type: String = "heavy"
 var bonus_vs_light: float = 0.0
@@ -94,25 +95,26 @@ func _process(delta: float) -> void:
 		return
 
 	fire_cooldown -= delta
-	target = _find_closest_enemy()
 
-	if target and global_position.distance_to(target.global_position) <= attack_range:
-		if fire_cooldown <= 0.0:
-			_shoot()
-			fire_cooldown = fire_rate
-	elif target:
-		var dir := (target.global_position - global_position).normalized()
-		position += dir * move_speed * delta
-	else:
-		# No enemies found, advance in default direction
-		var dir: Vector2
-		if team == GameData.Team.RED:
-			# Red on sides, advance toward center
-			dir = (GameData.get_zone_center() - global_position).normalized()
+	if team == GameData.Team.RED and attacking:
+		target = _find_closest_enemy()
+		if target and global_position.distance_to(target.global_position) <= attack_range:
+			if fire_cooldown <= 0.0:
+				_shoot()
+				fire_cooldown = fire_rate
+		elif target:
+			var dir := (target.global_position - global_position).normalized()
+			position += dir * move_speed * delta
 		else:
-			# Blue in center, advance outward via lane
-			dir = LANE_DIRECTIONS[lane]
-		position += dir * move_speed * delta
+			var dir := (GameData.get_zone_center() - global_position).normalized()
+			position += dir * move_speed * delta
+	elif team == GameData.Team.BLUE:
+		# ponytail: blue units stay put, defend in place
+		target = _find_closest_enemy()
+		if target and global_position.distance_to(target.global_position) <= attack_range:
+			if fire_cooldown <= 0.0:
+				_shoot()
+				fire_cooldown = fire_rate
 
 	# --- Visual effect timers ---
 	var needs_redraw := false
@@ -142,20 +144,14 @@ func _find_closest_enemy() -> Node2D:
 			if dist < closest_dist:
 				closest_dist = dist
 				closest = enemy
-	# Also consider bases as targets
+	# Only red units target bases (blue base)
 	if team == GameData.Team.RED:
 		if is_instance_valid(GameData.blue_base):
 			var dist := global_position.distance_to(GameData.blue_base.global_position)
 			if dist < closest_dist:
 				closest_dist = dist
 				closest = GameData.blue_base
-	else:
-		for b in GameData.red_bases:
-			if is_instance_valid(b):
-				var dist := global_position.distance_to(b.global_position)
-				if dist < closest_dist:
-					closest_dist = dist
-					closest = b
+	# ponytail: blue never targets red bases, defensive only
 	return closest
 
 
@@ -180,22 +176,18 @@ func _shoot() -> void:
 		_flame_range = attack_range
 		_flame_timer = FLAME_DURATION
 
-		# Full damage to primary target
-		target.take_damage(_damage_to(target))
-
-		# Half damage to other enemies in the cone
+		# Full damage to everything in the cone
 		var half_arc := flame_arc / 2.0
 		var enemies: Array = (GameData.blue_units if team == GameData.Team.RED else GameData.red_units).duplicate()
 		for enemy in enemies:
-			if not is_instance_valid(enemy) or enemy == target:
+			if not is_instance_valid(enemy):
 				continue
 			var to_enemy = enemy.global_position - global_position
-			var enemy_dist = to_enemy.length()
-			if enemy_dist > attack_range:
+			if to_enemy.length() > attack_range:
 				continue
 			var angle_diff := absf(_flame_dir.angle_to(to_enemy.normalized()))
 			if angle_diff <= half_arc:
-				enemy.take_damage(_damage_to(enemy) * 0.5)
+				enemy.take_damage(_damage_to(enemy))
 	elif dist <= MELEE_RANGE_THRESHOLD:
 		# Melee attack
 		_melee_slash_timer = MELEE_SLASH_DURATION
@@ -227,14 +219,15 @@ func _draw() -> void:
 		team as GameData.Team, unit_type as GameData.UnitType
 	)
 	var is_red := (team == GameData.Team.RED)
-	var radius := 7.5
+	var half := GameData.BLUE_CELL_SIZE * 0.4
+	var sq := Rect2(-half, -half, half * 2, half * 2)
 
 	# Body
-	draw_circle(Vector2.ZERO, radius, body_color)
+	draw_rect(sq, body_color)
 
-	# Outline - white for red team, bright blue for blue team
+	# Outline
 	var outline_color := Color.WHITE if is_red else Color(0.3, 0.5, 1.0)
-	draw_arc(Vector2.ZERO, radius, 0, TAU, 32, outline_color, 1.25)
+	draw_rect(sq, outline_color, false, 0.9)
 
 	# Unit letter
 	var font := ThemeDB.fallback_font
@@ -245,9 +238,9 @@ func _draw() -> void:
 	draw_string(font, Vector2(-text_size.x / 2.0, text_size.y / 4.0), letter, HORIZONTAL_ALIGNMENT_CENTER, -1, 7, Color.WHITE)
 
 	# HP bar
-	var bar_w := 15.0
-	var bar_h := 2.0
-	var bar_y := -11.0
+	var bar_w := half * 2
+	var bar_h := 1.4
+	var bar_y := -half - 2.0
 	var hp_ratio := clampf(current_hp / max_hp, 0.0, 1.0)
 
 	draw_rect(Rect2(-bar_w / 2.0, bar_y, bar_w, bar_h), Color(0.2, 0.0, 0.0))
@@ -256,7 +249,7 @@ func _draw() -> void:
 	# --- Damage flash ---
 	if _damage_flash_timer > 0.0:
 		var flash_alpha: float = _damage_flash_timer / DAMAGE_FLASH_DURATION
-		draw_circle(Vector2.ZERO, radius, Color(1.0, 0.85, 0.85, flash_alpha * 0.7))
+		draw_rect(sq, Color(1.0, 0.85, 0.85, flash_alpha * 0.7))
 
 	# --- Ranged shot line ---
 	if _shot_timer > 0.0:
@@ -268,7 +261,7 @@ func _draw() -> void:
 	# --- Melee slash ---
 	if _melee_slash_timer > 0.0:
 		var slash_alpha: float = _melee_slash_timer / MELEE_SLASH_DURATION
-		var slash_center := _melee_slash_dir * (radius + 5.0)
+		var slash_center = _melee_slash_dir * (half + 5.0)
 		var slash_angle := _melee_slash_dir.angle()
 		draw_arc(slash_center, 6.0, slash_angle - 0.8, slash_angle + 0.8, 8, Color(1.0, 0.9, 0.6, slash_alpha * 0.9), 2.0)
 
@@ -301,15 +294,3 @@ func _draw() -> void:
 
 		# Arc outline
 		draw_arc(Vector2.ZERO, cone_range, base_angle - half_arc, base_angle + half_arc, segments, Color(1.0, 0.6, 0.2, flame_alpha * 0.6), 1.5)
-
-	# Lane direction arrow for blue units (center team advances outward)
-	if not is_red:
-		var arrow_dir: Vector2 = LANE_DIRECTIONS[lane]
-		var arrow_start := arrow_dir * (radius + 3.0)
-		var arrow_end := arrow_dir * (radius + 10.0)
-		var arrow_color := Color(1.0, 1.0, 0.5, 0.9)
-		draw_line(arrow_start, arrow_end, arrow_color, 1.0)
-		var perp := Vector2(-arrow_dir.y, arrow_dir.x) * 2.0
-		var head_base := arrow_dir * (radius + 6.0)
-		draw_line(arrow_end, head_base + perp, arrow_color, 1.0)
-		draw_line(arrow_end, head_base - perp, arrow_color, 1.0)

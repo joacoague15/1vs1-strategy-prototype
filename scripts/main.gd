@@ -201,23 +201,25 @@ func _handle_placement_input(event: InputEvent) -> void:
 				placement_type as GameData.UnitType
 			)
 			if placement_team == GameData.Team.RED:
-				# Red places on side zones
 				var side_lane := _get_side_lane_at(pos)
-				if side_lane >= 0 and not _is_position_overlapping(pos):
-					if GameData.spend_gold(GameData.Team.RED, cost):
-						_spawn_red_unit(placement_type, pos, side_lane)
-					if GameData.red_gold < cost:
-						placement_mode = false
-						hud.show_placement_hint(false)
+				if side_lane >= 0:
+					var cell_pos := _snap_red_grid(pos)
+					if not _is_cell_occupied(cell_pos, GameData.Team.RED):
+						if GameData.spend_gold(GameData.Team.RED, cost):
+							_spawn_red_unit(placement_type, cell_pos, _get_side_lane_at(cell_pos))
+						if GameData.red_gold < cost:
+							placement_mode = false
+							hud.show_placement_hint(false)
 			else:
-				# Blue places in center zone
 				var center_lane := _get_center_lane_at(pos)
-				if center_lane >= 0 and not _is_position_overlapping(pos):
-					if GameData.spend_gold(GameData.Team.BLUE, cost):
-						_spawn_blue_unit(placement_type, pos, center_lane)
-					if GameData.blue_gold < cost:
-						placement_mode = false
-						hud.show_placement_hint(false)
+				if center_lane >= 0:
+					var cell_pos := _snap_blue_grid(pos)
+					if not _is_cell_occupied(cell_pos, GameData.Team.BLUE):
+						if GameData.spend_gold(GameData.Team.BLUE, cost):
+							_spawn_blue_unit(placement_type, cell_pos, _get_center_lane_at(cell_pos))
+						if GameData.blue_gold < cost:
+							placement_mode = false
+							hud.show_placement_hint(false)
 			get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			placement_mode = false
@@ -235,8 +237,14 @@ func _handle_drag_input(event: InputEvent) -> void:
 			if dragging_unit:
 				return
 			var pos := get_global_mouse_position()
+			# Click on red zone → launch that lane
+			var launch_lane := _get_side_lane_at(pos)
+			if launch_lane >= 0:
+				_launch_red_lane(launch_lane)
+				get_viewport().set_input_as_handled()
+				return
 			var unit := _find_unit_at(pos)
-			if unit:
+			if unit and not unit.get("attacking"):
 				dragging_unit = unit
 				drag_offset = unit.position - pos
 				drag_original_pos = unit.position
@@ -265,14 +273,14 @@ func _handle_drag_input(event: InputEvent) -> void:
 					# ponytail: bases drop anywhere, no clamping
 					pass
 				elif dragging_unit.team == GameData.Team.RED:
-					target_pos = _clamp_to_nearest_side_zone(target_pos)
-					if _is_position_overlapping(target_pos, dragging_unit):
+					target_pos = _snap_red_grid(target_pos)
+					if _is_cell_occupied(target_pos, GameData.Team.RED, dragging_unit):
 						target_pos = drag_original_pos
 					else:
 						dragging_unit.lane = _get_side_lane_at(target_pos)
 				else:
-					target_pos = _clamp_to_center_zone(target_pos)
-					if _is_position_overlapping(target_pos, dragging_unit):
+					target_pos = _snap_blue_grid(target_pos)
+					if _is_cell_occupied(target_pos, GameData.Team.BLUE, dragging_unit):
 						target_pos = drag_original_pos
 					else:
 						dragging_unit.lane = _get_center_lane_at(target_pos)
@@ -304,6 +312,52 @@ func _is_position_overlapping(pos: Vector2, exclude_unit: Node2D = null) -> bool
 	for unit in GameData.blue_units:
 		if is_instance_valid(unit) and unit != exclude_unit:
 			if pos.distance_to(unit.position) < UNIT_MIN_DISTANCE:
+				return true
+	return false
+
+
+# --- Grid helpers ---
+
+func _snap_to_grid(pos: Vector2, zmin: Vector2, zmax: Vector2) -> Vector2:
+	var cs := GameData.BLUE_CELL_SIZE
+	var col := int((pos.x - zmin.x) / cs)
+	var row := int((pos.y - zmin.y) / cs)
+	col = clampi(col, 0, int((zmax.x - zmin.x) / cs) - 1)
+	row = clampi(row, 0, int((zmax.y - zmin.y) / cs) - 1)
+	return Vector2(zmin.x + (col + 0.5) * cs, zmin.y + (row + 0.5) * cs)
+
+
+func _snap_blue_grid(pos: Vector2) -> Vector2:
+	return _snap_to_grid(pos, center_min, center_max)
+
+
+func _snap_red_grid(pos: Vector2) -> Vector2:
+	# Snap to nearest side zone grid
+	var zones := [[north_min, north_max], [south_min, south_max],
+				  [east_min, east_max], [west_min, west_max]]
+	var best := pos
+	var best_dist := INF
+	for z in zones:
+		var snapped := _snap_to_grid(pos, z[0], z[1])
+		var d := pos.distance_to(snapped)
+		if d < best_dist:
+			best_dist = d
+			best = snapped
+	return best
+
+
+func _is_cell_occupied(cell_pos: Vector2, team: int, exclude_unit: Node2D = null) -> bool:
+	if team == GameData.Team.BLUE:
+		# Base occupies 3x3 cells
+		if is_instance_valid(GameData.blue_base):
+			var bp := GameData.blue_base.global_position
+			var cs15 := GameData.BLUE_CELL_SIZE * 1.5
+			if absf(cell_pos.x - bp.x) < cs15 and absf(cell_pos.y - bp.y) < cs15:
+				return true
+	var units: Array = GameData.blue_units if team == GameData.Team.BLUE else GameData.red_units
+	for unit in units:
+		if is_instance_valid(unit) and unit != exclude_unit:
+			if unit.position.distance_to(cell_pos) < 1.0:
 				return true
 	return false
 
@@ -381,6 +435,12 @@ func _find_unit_at(pos: Vector2) -> Node2D:
 func _process(_delta: float) -> void:
 	if placement_mode or dragging_unit or zone_dragging:
 		queue_redraw()
+
+
+func _launch_red_lane(lane: int) -> void:
+	for unit in GameData.red_units:
+		if is_instance_valid(unit) and unit.lane == lane and not unit.attacking:
+			unit.attacking = true
 
 
 func _spawn_red_unit(unit_type: int, pos: Vector2, lane: int) -> void:
@@ -523,15 +583,35 @@ func _draw_handle(pos: Vector2, size: float, color: Color) -> void:
 func _draw() -> void:
 	draw_rect(Rect2(0, 0, 1280, 720), Color(0.08, 0.09, 0.12))
 
-	# Blue = center
+	# Blue = center + grid
 	draw_rect(Rect2(center_min, center_max - center_min), Color(0.12, 0.14, 0.22))
+	var cs := GameData.BLUE_CELL_SIZE
+	var grid_color := Color(0.2, 0.22, 0.32)
+	var x := center_min.x + cs
+	while x < center_max.x:
+		draw_line(Vector2(x, center_min.y), Vector2(x, center_max.y), grid_color, 0.5)
+		x += cs
+	var y := center_min.y + cs
+	while y < center_max.y:
+		draw_line(Vector2(center_min.x, y), Vector2(center_max.x, y), grid_color, 0.5)
+		y += cs
 
-	# Red = sides
+	# Red = sides + grid
 	var red_tint := Color(0.22, 0.12, 0.12)
-	draw_rect(Rect2(north_min, north_max - north_min), red_tint)
-	draw_rect(Rect2(south_min, south_max - south_min), red_tint)
-	draw_rect(Rect2(east_min, east_max - east_min), red_tint)
-	draw_rect(Rect2(west_min, west_max - west_min), red_tint)
+	var red_grid_color := Color(0.32, 0.2, 0.2)
+	for zone in [[north_min, north_max], [south_min, south_max],
+				 [east_min, east_max], [west_min, west_max]]:
+		var zmin: Vector2 = zone[0]
+		var zmax: Vector2 = zone[1]
+		draw_rect(Rect2(zmin, zmax - zmin), red_tint)
+		var rx := zmin.x + cs
+		while rx < zmax.x:
+			draw_line(Vector2(rx, zmin.y), Vector2(rx, zmax.y), red_grid_color, 0.5)
+			rx += cs
+		var ry := zmin.y + cs
+		while ry < zmax.y:
+			draw_line(Vector2(zmin.x, ry), Vector2(zmax.x, ry), red_grid_color, 0.5)
+			ry += cs
 
 	# Borders
 	var border_color := Color(0.3, 0.3, 0.4)
@@ -555,12 +635,18 @@ func _draw() -> void:
 	if placement_mode and GameData.game_phase == GameData.GamePhase.PLAYING:
 		var mouse_pos := get_local_mouse_position()
 		var in_zone: bool
+		var ghost_pos := mouse_pos
+		var overlapping: bool
 		if placement_team == GameData.Team.RED:
 			in_zone = _get_side_lane_at(mouse_pos) >= 0
+			if in_zone:
+				ghost_pos = _snap_red_grid(mouse_pos)
+			overlapping = in_zone and _is_cell_occupied(ghost_pos, GameData.Team.RED)
 		else:
 			in_zone = _get_center_lane_at(mouse_pos) >= 0
-
-		var overlapping := in_zone and _is_position_overlapping(mouse_pos)
+			if in_zone:
+				ghost_pos = _snap_blue_grid(mouse_pos)
+			overlapping = in_zone and _is_cell_occupied(ghost_pos, GameData.Team.BLUE)
 
 		var ghost_color: Color = GameData.get_unit_color(
 			placement_team as GameData.Team, placement_type as GameData.UnitType
@@ -575,24 +661,27 @@ func _draw() -> void:
 		else:
 			ghost_color.a = 0.5
 
-		draw_circle(mouse_pos, 7.5, ghost_color)
+		var ghalf := GameData.BLUE_CELL_SIZE * 0.4
+		draw_rect(Rect2(ghost_pos.x - ghalf, ghost_pos.y - ghalf, ghalf * 2, ghalf * 2), ghost_color)
 		if in_zone and not overlapping:
 			var outline := Color.WHITE if placement_team == GameData.Team.RED else Color(0.3, 0.5, 1.0)
 			outline.a = 0.5
-			draw_arc(mouse_pos, 7.5, 0, TAU, 32, outline, 0.75)
+			draw_rect(Rect2(ghost_pos.x - ghalf, ghost_pos.y - ghalf, ghalf * 2, ghalf * 2), outline, false, 0.75)
 
 	# Drag highlight
 	if dragging_unit and is_instance_valid(dragging_unit) \
 			and GameData.game_phase == GameData.GamePhase.PLAYING:
 		var unit_pos := dragging_unit.position
-		var clamped_pos: Vector2
-		if dragging_unit.team == GameData.Team.RED:
-			clamped_pos = _clamp_to_nearest_side_zone(unit_pos)
+		var snap_pos: Vector2
+		var team_id: int = dragging_unit.team
+		if team_id == GameData.Team.RED:
+			snap_pos = _snap_red_grid(unit_pos)
 		else:
-			clamped_pos = _clamp_to_center_zone(unit_pos)
-		var is_overlap := _is_position_overlapping(clamped_pos, dragging_unit)
+			snap_pos = _snap_blue_grid(unit_pos)
+		var is_overlap := _is_cell_occupied(snap_pos, team_id, dragging_unit)
 		var highlight_color := Color(1, 0.2, 0.2, 0.7) if is_overlap else Color(1, 1, 0, 0.7)
-		draw_arc(unit_pos, 10.0, 0, TAU, 32, highlight_color, 1.0)
+		var hs := GameData.BLUE_CELL_SIZE * 0.5
+		draw_rect(Rect2(snap_pos.x - hs, snap_pos.y - hs, hs * 2, hs * 2), highlight_color, false, 1.0)
 
 	# Zone edit handles when F1 is visible
 	if hud.debug_panel.visible:

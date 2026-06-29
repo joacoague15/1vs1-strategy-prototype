@@ -635,3 +635,4 @@ func _debug_apply_stats() -> void:
 		debug_selected_team as GameData.Team,
 		debug_selected_unit as GameData.UnitType
 	)
+	GameData.save_units_json()

@@ -24,7 +24,8 @@ const SHOT_LINE_DURATION: float = 0.12
 
 # Shape size
 const DIAMOND_SIZE: float = 18.0
-const SQUARE_SIZE: float = 22.0
+# ponytail: blue base = 3x3 grid cells
+var SQUARE_SIZE: float = GameData.BLUE_CELL_SIZE * 1.5
 
 
 func _process(delta: float) -> void:
@@ -92,7 +93,7 @@ func _draw() -> void:
 		_draw_square()
 
 	# HP bar
-	var bar_w := 20.0
+	var bar_w := SQUARE_SIZE * 2 if team == GameData.Team.BLUE else 20.0
 	var bar_h := 3.0
 	var bar_y := -DIAMOND_SIZE - 5.0 if team == GameData.Team.RED else -SQUARE_SIZE - 5.0
 	var hp_ratio := clampf(current_hp / max_hp, 0.0, 1.0)

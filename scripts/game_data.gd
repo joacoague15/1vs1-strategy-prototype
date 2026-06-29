@@ -43,6 +43,7 @@ const INCOME_INTERVAL: float = 1.0
 
 const FACTORY_COST: int = 10
 const TILE_SIZE: float = 100.0
+const BLUE_CELL_SIZE: float = 20.0
 
 # Zone rects: each zone is [min_corner, max_corner], independently editable
 var zone_rects := {
@@ -99,13 +100,13 @@ func _load_fallback() -> void:
 	# Minimal data so the game doesn't crash on startup
 	RED_UNITS = {
 		UnitType.ALPHA: {"name": "Alpha", "letter": "A", "cost": 50, "hp": 50.0,
-			"damage": 10.0, "attack_range": 1.0, "fire_rate": 1.0, "move_speed": 80.0,
+			"damage": 10.0, "attack_range": 1.0, "fire_rate": 1.0, "move_speed": 56.0,
 			"color": Color(0.7, 0.3, 0.3), "armor_type": "light"},
 		UnitType.BRAVO: {"name": "Bravo", "letter": "B", "cost": 100, "hp": 80.0,
-			"damage": 12.0, "attack_range": 2.0, "fire_rate": 0.6, "move_speed": 75.0,
+			"damage": 12.0, "attack_range": 2.0, "fire_rate": 0.6, "move_speed": 52.5,
 			"color": Color(0.5, 0.7, 0.3), "armor_type": "light"},
 		UnitType.CHARLIE: {"name": "Charlie", "letter": "C", "cost": 150, "hp": 140.0,
-			"damage": 16.0, "attack_range": 1.5, "fire_rate": 1.5, "move_speed": 70.0,
+			"damage": 16.0, "attack_range": 1.5, "fire_rate": 1.5, "move_speed": 49.0,
 			"color": Color(0.6, 0.5, 0.2), "armor_type": "heavy"},
 	}
 	BLUE_UNITS = RED_UNITS.duplicate(true)
@@ -193,6 +194,27 @@ func unregister_unit(unit: Node, team: Team) -> void:
 		red_units.erase(unit)
 	else:
 		blue_units.erase(unit)
+
+
+const _TYPE_NAME_MAP := {UnitType.ALPHA: "ALPHA", UnitType.BRAVO: "BRAVO", UnitType.CHARLIE: "CHARLIE"}
+
+func save_units_json() -> void:
+	var out := {"red": {}, "blue": {}}
+	for unit_type in _TYPE_NAME_MAP:
+		var key: String = _TYPE_NAME_MAP[unit_type]
+		for pair in [["red", RED_UNITS], ["blue", BLUE_UNITS]]:
+			var team_key: String = pair[0]
+			var units: Dictionary = pair[1]
+			if not units.has(unit_type):
+				continue
+			var d: Dictionary = units[unit_type].duplicate()
+			# Convert Color back to array
+			var c: Color = d["color"]
+			d["color"] = [snappedf(c.r, 0.01), snappedf(c.g, 0.01), snappedf(c.b, 0.01)]
+			out[team_key][key] = d
+	var file := FileAccess.open("res://data/units.json", FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(out, "\t"))
 
 
 func reset_game() -> void:

@@ -3,8 +3,6 @@ extends CanvasLayer
 signal red_purchase_requested(unit_type: int)
 signal blue_purchase_requested(unit_type: int)
 signal blue_factory_requested
-signal start_wave_requested
-signal stop_wave_requested
 signal restart_requested
 signal red_gold_set_requested(amount: int)
 signal blue_gold_set_requested(amount: int)
@@ -26,9 +24,6 @@ var blue_btn_charlie: Button
 var blue_btn_factory: Button
 
 # Shared
-var wave_label: Label
-var btn_start: Button
-var btn_stop: Button
 var btn_speed: Button
 var speed_index: int = 0
 var placement_label: Label
@@ -52,6 +47,8 @@ var debug_team_btn: Button
 var debug_unit_btn: Button
 var debug_spinboxes: Dictionary = {}
 var _updating_debug: bool = false
+var _debug_dragging: bool = false
+var _debug_drag_offset: Vector2 = Vector2.ZERO
 
 
 func _ready() -> void:
@@ -196,25 +193,8 @@ func _build_bottom_panel(root: Control) -> void:
 
 	var hbox := HBoxContainer.new()
 	hbox.add_theme_constant_override("separation", 12)
-	hbox.position = Vector2(450, 640)
+	hbox.position = Vector2(550, 640)
 	bottom_panel.add_child(hbox)
-
-	wave_label = Label.new()
-	wave_label.add_theme_font_size_override("font_size", 16)
-	hbox.add_child(wave_label)
-
-	btn_start = Button.new()
-	btn_start.text = "START WAVE"
-	btn_start.custom_minimum_size = Vector2(160, 40)
-	btn_start.pressed.connect(func(): start_wave_requested.emit())
-	hbox.add_child(btn_start)
-
-	btn_stop = Button.new()
-	btn_stop.text = "STOP WAVE"
-	btn_stop.custom_minimum_size = Vector2(140, 40)
-	btn_stop.pressed.connect(func(): stop_wave_requested.emit())
-	btn_stop.visible = false
-	hbox.add_child(btn_stop)
 
 	btn_speed = Button.new()
 	btn_speed.text = "x1"
@@ -352,6 +332,12 @@ func _build_game_over_panel(root: Control) -> void:
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
 
+	var subtitle := Label.new()
+	subtitle.text = "Base azul destruida - Rojo gana!"
+	subtitle.add_theme_font_size_override("font_size", 18)
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(subtitle)
+
 	var btn := Button.new()
 	btn.text = "Reiniciar"
 	btn.custom_minimum_size = Vector2(200, 50)
@@ -382,6 +368,12 @@ func _build_win_panel(root: Control) -> void:
 	title.add_theme_color_override("font_color", Color(0.3, 1, 0.4))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
 	vbox.add_child(title)
+
+	var subtitle := Label.new()
+	subtitle.text = "Todas las bases rojas destruidas - Azul gana!"
+	subtitle.add_theme_font_size_override("font_size", 18)
+	subtitle.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	vbox.add_child(subtitle)
 
 	var btn := Button.new()
 	btn.text = "Reiniciar"
@@ -418,14 +410,11 @@ func _cycle_speed() -> void:
 
 
 func _on_phase_changed(phase: GameData.GamePhase) -> void:
-	var in_prep := (phase == GameData.GamePhase.PREPARATION)
-	var in_battle := (phase == GameData.GamePhase.BATTLE)
-	red_panel.visible = in_prep
-	blue_panel.visible = in_prep
-	bottom_panel.visible = true
-	editor_panel.visible = in_prep
-	btn_start.visible = in_prep
-	btn_stop.visible = in_battle
+	var playing := (phase == GameData.GamePhase.PLAYING)
+	red_panel.visible = playing
+	blue_panel.visible = playing
+	bottom_panel.visible = playing
+	editor_panel.visible = playing
 	game_over_panel.visible = (phase == GameData.GamePhase.GAME_OVER)
 	win_panel.visible = (phase == GameData.GamePhase.WIN)
 	placement_label.visible = false
@@ -436,15 +425,13 @@ func _refresh_labels() -> void:
 	if red_gold_label:
 		red_gold_label.text = "Oro: %d" % GameData.red_gold
 	if red_income_label:
-		red_income_label.text = "(+%d/ronda)" % GameData.red_income()
+		red_income_label.text = "(+%d/s)" % GameData.red_income()
 	if blue_gold_label:
 		blue_gold_label.text = "Oro: %d" % GameData.blue_gold
 	if blue_income_label:
-		blue_income_label.text = "(+%d/ronda)" % GameData.blue_income()
+		blue_income_label.text = "(+%d/s)" % GameData.blue_income()
 	if blue_factory_label:
 		blue_factory_label.text = "Fab: %d" % GameData.blue_factories
-	if wave_label:
-		wave_label.text = "Ronda: %d" % GameData.current_wave
 	if red_gold_spinbox:
 		_updating_spinbox = true
 		red_gold_spinbox.value = GameData.red_gold
@@ -459,24 +446,24 @@ func _refresh_labels() -> void:
 func _update_buttons() -> void:
 	if not red_btn_alpha:
 		return
-	var in_prep := GameData.game_phase == GameData.GamePhase.PREPARATION
-	red_btn_alpha.disabled = not (in_prep and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.ALPHA))
-	red_btn_bravo.disabled = not (in_prep and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.BRAVO))
-	red_btn_charlie.disabled = not (in_prep and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.CHARLIE))
+	var playing := GameData.game_phase == GameData.GamePhase.PLAYING
+	red_btn_alpha.disabled = not (playing and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.ALPHA))
+	red_btn_bravo.disabled = not (playing and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.BRAVO))
+	red_btn_charlie.disabled = not (playing and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.CHARLIE))
 
-	blue_btn_alpha.disabled = not (in_prep and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.ALPHA))
-	blue_btn_bravo.disabled = not (in_prep and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.BRAVO))
-	blue_btn_charlie.disabled = not (in_prep and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.CHARLIE))
-	blue_btn_factory.disabled = not (in_prep and GameData.blue_gold >= GameData.FACTORY_COST)
+	blue_btn_alpha.disabled = not (playing and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.ALPHA))
+	blue_btn_bravo.disabled = not (playing and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.BRAVO))
+	blue_btn_charlie.disabled = not (playing and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.CHARLIE))
+	blue_btn_factory.disabled = not (playing and GameData.blue_gold >= GameData.FACTORY_COST)
 
 
 func show_placement_hint(show: bool, team: int = GameData.Team.RED) -> void:
 	placement_label.visible = show
 	if show:
 		if team == GameData.Team.RED:
-			placement_label.text = "Click en la zona CENTRO (roja) para colocar | Click derecho o ESC para cancelar"
+			placement_label.text = "Click en una zona ROJA (N/S/E/O) para colocar | Click derecho o ESC para cancelar"
 		else:
-			placement_label.text = "Click en una zona AZUL (N/S/E/O) para colocar | Click derecho o ESC para cancelar"
+			placement_label.text = "Click en la zona CENTRO (azul) para colocar | Click derecho o ESC para cancelar"
 
 
 # --- Debug panel ---
@@ -492,10 +479,12 @@ func _build_debug_panel(root: Control) -> void:
 	debug_panel.add_child(vbox)
 
 	var title := Label.new()
-	title.text = "DEBUG STATS (F1)"
+	title.text = "DEBUG STATS (F1) [drag to move]"
 	title.add_theme_font_size_override("font_size", 14)
 	title.add_theme_color_override("font_color", Color(1.0, 0.6, 0.2))
 	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_STOP
+	title.gui_input.connect(_on_debug_title_input)
 	vbox.add_child(title)
 
 	# Team selector
@@ -531,19 +520,19 @@ func _build_debug_panel(root: Control) -> void:
 	unit_row.add_child(debug_unit_btn)
 
 	# Stat spinboxes
-	var stats := ["hp", "damage", "bonus_vs_light", "attack_range", "move_speed", "fire_rate", "flame_arc"]
+	var stats := ["hp", "damage", "bonus_vs_light", "bonus_vs_heavy", "attack_range", "move_speed", "fire_rate", "flame_arc"]
 	var labels := {
 		"hp": "HP", "damage": "Damage", "bonus_vs_light": "Bonus vs Light",
-		"attack_range": "Range (tiles)",
+		"bonus_vs_heavy": "Bonus vs Heavy", "attack_range": "Range (tiles)",
 		"move_speed": "Speed", "fire_rate": "Fire Rate (s)", "flame_arc": "Flame Arc (deg)"
 	}
 	var steps := {
-		"hp": 5.0, "damage": 1.0, "bonus_vs_light": 1.0, "attack_range": 0.1,
-		"move_speed": 5.0, "fire_rate": 0.1, "flame_arc": 5.0
+		"hp": 5.0, "damage": 1.0, "bonus_vs_light": 1.0, "bonus_vs_heavy": 1.0,
+		"attack_range": 0.1, "move_speed": 5.0, "fire_rate": 0.1, "flame_arc": 5.0
 	}
 	var ranges := {
 		"hp": [1.0, 999.0], "damage": [0.0, 200.0], "bonus_vs_light": [0.0, 100.0],
-		"attack_range": [0.1, 10.0],
+		"bonus_vs_heavy": [0.0, 100.0], "attack_range": [0.1, 10.0],
 		"move_speed": [0.0, 500.0], "fire_rate": [0.05, 10.0], "flame_arc": [10.0, 360.0]
 	}
 
@@ -574,6 +563,17 @@ func _build_debug_panel(root: Control) -> void:
 	vbox.add_child(apply_btn)
 
 	_debug_refresh_spinboxes()
+
+
+func _on_debug_title_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_debug_dragging = true
+			_debug_drag_offset = debug_panel.position - event.global_position
+		else:
+			_debug_dragging = false
+	elif event is InputEventMouseMotion and _debug_dragging:
+		debug_panel.position = event.global_position + _debug_drag_offset
 
 
 func _unhandled_input(event: InputEvent) -> void:

@@ -12,10 +12,10 @@ var attack_range: float = 200.0
 var move_speed: float = 80.0
 var fire_cooldown: float = 0.0
 var target: Node2D = null
-var spawn_position: Vector2 = Vector2.ZERO
 var unit_cost: int = 50
 var armor_type: String = "heavy"
 var bonus_vs_light: float = 0.0
+var bonus_vs_heavy: float = 0.0
 
 # --- Visual feedback state ---
 var _shot_timer: float = 0.0
@@ -58,6 +58,7 @@ func _ready() -> void:
 	unit_cost = data["cost"]
 	armor_type = data.get("armor_type", "heavy")
 	bonus_vs_light = data.get("bonus_vs_light", 0.0)
+	bonus_vs_heavy = data.get("bonus_vs_heavy", 0.0)
 	if data.has("flame_arc"):
 		flame_arc = deg_to_rad(data["flame_arc"])
 	else:
@@ -80,6 +81,7 @@ func reload_stats() -> void:
 	unit_cost = data["cost"]
 	armor_type = data.get("armor_type", "heavy")
 	bonus_vs_light = data.get("bonus_vs_light", 0.0)
+	bonus_vs_heavy = data.get("bonus_vs_heavy", 0.0)
 	if data.has("flame_arc"):
 		flame_arc = deg_to_rad(data["flame_arc"])
 	else:
@@ -88,7 +90,7 @@ func reload_stats() -> void:
 
 
 func _process(delta: float) -> void:
-	if GameData.game_phase != GameData.GamePhase.BATTLE:
+	if GameData.game_phase != GameData.GamePhase.PLAYING:
 		return
 
 	fire_cooldown -= delta
@@ -105,10 +107,11 @@ func _process(delta: float) -> void:
 		# No enemies found, advance in default direction
 		var dir: Vector2
 		if team == GameData.Team.RED:
-			dir = LANE_DIRECTIONS[lane]
+			# Red on sides, advance toward center
+			dir = (GameData.get_zone_center() - global_position).normalized()
 		else:
-			var center := Vector2(640, 360)
-			dir = (center - global_position).normalized()
+			# Blue in center, advance outward via lane
+			dir = LANE_DIRECTIONS[lane]
 		position += dir * move_speed * delta
 
 	# --- Visual effect timers ---
@@ -139,6 +142,20 @@ func _find_closest_enemy() -> Node2D:
 			if dist < closest_dist:
 				closest_dist = dist
 				closest = enemy
+	# Also consider bases as targets
+	if team == GameData.Team.RED:
+		if is_instance_valid(GameData.blue_base):
+			var dist := global_position.distance_to(GameData.blue_base.global_position)
+			if dist < closest_dist:
+				closest_dist = dist
+				closest = GameData.blue_base
+	else:
+		for b in GameData.red_bases:
+			if is_instance_valid(b):
+				var dist := global_position.distance_to(b.global_position)
+				if dist < closest_dist:
+					closest_dist = dist
+					closest = b
 	return closest
 
 
@@ -146,6 +163,8 @@ func _damage_to(enemy: Node2D) -> float:
 	# ponytail: flat bonus vs light, same as SC1 bonus damage
 	if bonus_vs_light > 0.0 and enemy.armor_type == "light":
 		return damage + bonus_vs_light
+	if bonus_vs_heavy > 0.0 and enemy.armor_type == "heavy":
+		return damage + bonus_vs_heavy
 	return damage
 
 
@@ -201,21 +220,6 @@ func _die() -> void:
 	GameData.unregister_unit(self, team as GameData.Team)
 	queue_free()
 
-
-func save_spawn_position() -> void:
-	spawn_position = position
-
-
-func reset_to_spawn() -> void:
-	position = spawn_position
-	current_hp = max_hp
-	fire_cooldown = 0.0
-	target = null
-	_shot_timer = 0.0
-	_damage_flash_timer = 0.0
-	_melee_slash_timer = 0.0
-	_flame_timer = 0.0
-	queue_redraw()
 
 
 func _draw() -> void:
@@ -298,8 +302,8 @@ func _draw() -> void:
 		# Arc outline
 		draw_arc(Vector2.ZERO, cone_range, base_angle - half_arc, base_angle + half_arc, segments, Color(1.0, 0.6, 0.2, flame_alpha * 0.6), 1.5)
 
-	# Lane direction arrow for red units
-	if is_red:
+	# Lane direction arrow for blue units (center team advances outward)
+	if not is_red:
 		var arrow_dir: Vector2 = LANE_DIRECTIONS[lane]
 		var arrow_start := arrow_dir * (radius + 3.0)
 		var arrow_end := arrow_dir * (radius + 10.0)

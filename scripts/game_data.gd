@@ -1,7 +1,7 @@
 extends Node
 
 enum UnitType { ALPHA, BRAVO, CHARLIE }
-enum GamePhase { PREPARATION, BATTLE, GAME_OVER, WIN }
+enum GamePhase { PLAYING, GAME_OVER, WIN }
 enum Team { RED, BLUE }
 enum Lane { NORTH, EAST, SOUTH, WEST }
 
@@ -9,6 +9,8 @@ signal red_gold_changed(new_amount: int)
 signal blue_gold_changed(new_amount: int)
 signal phase_changed(new_phase: GamePhase)
 signal unit_stats_changed(team: Team, unit_type: UnitType)
+signal zones_changed
+signal base_destroyed(base_node: Node2D)
 
 var red_gold: int = 0:
 	set(value):
@@ -23,8 +25,7 @@ var blue_gold: int = 0:
 var blue_factories: int = 0
 var base_income: int = 50
 var factory_income: int = 25
-var current_wave: int = 0
-var game_phase: GamePhase = GamePhase.PREPARATION:
+var game_phase: GamePhase = GamePhase.PLAYING:
 	set(value):
 		game_phase = value
 		phase_changed.emit(game_phase)
@@ -32,59 +33,93 @@ var game_phase: GamePhase = GamePhase.PREPARATION:
 var red_units: Array = []
 var blue_units: Array = []
 
+# Bases
+var red_bases: Array = []
+var blue_base: Node2D = null
+
+# Income timer
+var _income_timer: float = 0.0
+const INCOME_INTERVAL: float = 1.0
+
 const FACTORY_COST: int = 10
 const TILE_SIZE: float = 100.0
 
-# --- Unit stats per team ---
-# Keys: cost, hp, damage, attack_range (in tiles), fire_rate, move_speed, name, color
-var RED_UNITS := {
-	UnitType.ALPHA: {
-		"name": "Zergling", "letter": "Z",
-		"cost": 50, "hp": 35.0, "damage": 5.0,
-		"attack_range": 0.3, "fire_rate": 0.4, "move_speed": 100.0,
-		"color": Color(0.7, 0.9, 0.3),
-		"armor_type": "light", "bonus_vs_light": 3.0,
-	},
-	UnitType.BRAVO: {
-		"name": "Hydralisk", "letter": "H",
-		"cost": 100, "hp": 80.0, "damage": 12.0,
-		"attack_range": 2.0, "fire_rate": 0.6, "move_speed": 87.5,
-		"color": Color(0.4, 0.75, 0.4),
-		"armor_type": "light", "bonus_vs_light": 5.0,
-	},
-	UnitType.CHARLIE: {
-		"name": "Roach", "letter": "R",
-		"cost": 150, "hp": 140.0, "damage": 16.0,
-		"attack_range": 1.6, "fire_rate": 1.5, "move_speed": 87.5,
-		"color": Color(0.6, 0.5, 0.2),
-		"armor_type": "heavy",
-	},
+# Zone rects: each zone is [min_corner, max_corner], independently editable
+var zone_rects := {
+	"center": [Vector2(490, 210), Vector2(790, 510)],
+	"north":  [Vector2(490, 100), Vector2(790, 200)],
+	"south":  [Vector2(490, 520), Vector2(790, 620)],
+	"west":   [Vector2(380, 210), Vector2(480, 510)],
+	"east":   [Vector2(800, 210), Vector2(900, 510)],
 }
 
-var BLUE_UNITS := {
-	UnitType.ALPHA: {
-		"name": "Marine", "letter": "M",
-		"cost": 50, "hp": 50.0, "damage": 6.0,
-		"attack_range": 1.5, "fire_rate": 0.5, "move_speed": 75.0,
-		"color": Color(0.3, 0.5, 0.9),
-		"armor_type": "light",
-	},
-	UnitType.BRAVO: {
-		"name": "Firebat", "letter": "F",
-		"cost": 100, "hp": 100.0, "damage": 8.0,
-		"attack_range": 2.0, "fire_rate": 1.8, "move_speed": 75.0,
-		"color": Color(0.9, 0.5, 0.2),
-		"flame_arc": 60.0,
-		"armor_type": "heavy", "bonus_vs_light": 4.0,
-	},
-	UnitType.CHARLIE: {
-		"name": "Tank", "letter": "T",
-		"cost": 150, "hp": 200.0, "damage": 20.0,
-		"attack_range": 2.8, "fire_rate": 1.0, "move_speed": 70.0,
-		"color": Color(0.5, 0.5, 0.6),
-		"armor_type": "heavy",
-	},
-}
+
+func get_zone_center() -> Vector2:
+	var r: Array = zone_rects["center"]
+	return (r[0] + r[1]) / 2.0
+
+# --- Unit stats per team (loaded from data/units.json) ---
+var RED_UNITS := {}
+var BLUE_UNITS := {}
+
+const _TYPE_MAP := {"ALPHA": UnitType.ALPHA, "BRAVO": UnitType.BRAVO, "CHARLIE": UnitType.CHARLIE}
+
+func _ready() -> void:
+	_load_units_json()
+
+
+func _process(delta: float) -> void:
+	if game_phase != GamePhase.PLAYING:
+		return
+	_income_timer += delta
+	if _income_timer >= INCOME_INTERVAL:
+		_income_timer -= INCOME_INTERVAL
+		add_gold(Team.RED, red_income())
+		add_gold(Team.BLUE, blue_income())
+
+
+func _load_units_json() -> void:
+	# ponytail: retry up to 3 times — OneDrive can lock the file briefly
+	var parsed = null
+	for attempt in 3:
+		var file := FileAccess.open("res://data/units.json", FileAccess.READ)
+		if file:
+			parsed = JSON.parse_string(file.get_as_text())
+			if parsed != null:
+				break
+	if parsed == null:
+		push_error("Cannot load data/units.json after 3 attempts, using fallback")
+		_load_fallback()
+		return
+	RED_UNITS = _parse_team(parsed["red"])
+	BLUE_UNITS = _parse_team(parsed["blue"])
+
+
+func _load_fallback() -> void:
+	# Minimal data so the game doesn't crash on startup
+	RED_UNITS = {
+		UnitType.ALPHA: {"name": "Alpha", "letter": "A", "cost": 50, "hp": 50.0,
+			"damage": 10.0, "attack_range": 1.0, "fire_rate": 1.0, "move_speed": 80.0,
+			"color": Color(0.7, 0.3, 0.3), "armor_type": "light"},
+		UnitType.BRAVO: {"name": "Bravo", "letter": "B", "cost": 100, "hp": 80.0,
+			"damage": 12.0, "attack_range": 2.0, "fire_rate": 0.6, "move_speed": 75.0,
+			"color": Color(0.5, 0.7, 0.3), "armor_type": "light"},
+		UnitType.CHARLIE: {"name": "Charlie", "letter": "C", "cost": 150, "hp": 140.0,
+			"damage": 16.0, "attack_range": 1.5, "fire_rate": 1.5, "move_speed": 70.0,
+			"color": Color(0.6, 0.5, 0.2), "armor_type": "heavy"},
+	}
+	BLUE_UNITS = RED_UNITS.duplicate(true)
+
+
+func _parse_team(team_data: Dictionary) -> Dictionary:
+	var result := {}
+	for key in team_data:
+		var unit: Dictionary = team_data[key].duplicate()
+		# Convert color array [r, g, b] to Color
+		var c: Array = unit["color"]
+		unit["color"] = Color(c[0], c[1], c[2])
+		result[_TYPE_MAP[key]] = unit
+	return result
 
 
 func get_unit_data(team: Team, unit_type: UnitType) -> Dictionary:
@@ -144,17 +179,6 @@ func add_gold(team: Team, amount: int) -> void:
 		blue_gold += amount
 
 
-func start_preparation() -> void:
-	current_wave += 1
-	add_gold(Team.RED, red_income())
-	add_gold(Team.BLUE, blue_income())
-	game_phase = GamePhase.PREPARATION
-
-
-func start_battle() -> void:
-	game_phase = GamePhase.BATTLE
-
-
 func register_unit(unit: Node, team: Team) -> void:
 	if team == Team.RED:
 		if unit not in red_units:
@@ -175,6 +199,8 @@ func reset_game() -> void:
 	red_gold = 0
 	blue_gold = 0
 	blue_factories = 0
-	current_wave = 0
 	red_units.clear()
 	blue_units.clear()
+	red_bases.clear()
+	blue_base = null
+	_income_timer = 0.0

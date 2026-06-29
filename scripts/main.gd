@@ -1,23 +1,21 @@
 extends Node2D
 
 const UNIT_SCENE := preload("res://scenes/unit.tscn")
+const BASE_SCRIPT := preload("res://scripts/base.gd")
 
-# Red zone: single 300x300 square centered at (640, 360).
-# Blue zones 100x100 each, 10px gap from red edges.
-
-const RED_MIN := Vector2(490, 210)
-const RED_MAX := Vector2(790, 510)
-const RED_CENTER := Vector2(640, 360)
-
-# Blue zones (match red edge length, 100px deep, 10px gap from red)
-const NORTH_MIN := Vector2(490, 100)
-const NORTH_MAX := Vector2(790, 200)
-const SOUTH_MIN := Vector2(490, 520)
-const SOUTH_MAX := Vector2(790, 620)
-const WEST_MIN := Vector2(380, 210)
-const WEST_MAX := Vector2(480, 510)
-const EAST_MIN := Vector2(800, 210)
-const EAST_MAX := Vector2(900, 510)
+# Zone rects computed from GameData params.
+# Blue = center, Red = sides (N/S/E/W).
+var center_min: Vector2
+var center_max: Vector2
+var center_pos: Vector2
+var north_min: Vector2
+var north_max: Vector2
+var south_min: Vector2
+var south_max: Vector2
+var west_min: Vector2
+var west_max: Vector2
+var east_min: Vector2
+var east_max: Vector2
 
 const UNIT_CLICK_RADIUS := 9.0
 const UNIT_MIN_DISTANCE := 16.0
@@ -29,29 +27,99 @@ var dragging_unit: Node2D = null
 var drag_offset: Vector2 = Vector2.ZERO
 var drag_original_pos: Vector2 = Vector2.ZERO
 
+# Zone edge dragging (active when F1 panel visible)
+var zone_dragging: bool = false
+var zone_drag_zone: String = ""
+var zone_drag_side: String = ""   # "top", "bottom", "left", "right", "body"
+var zone_drag_start: Vector2 = Vector2.ZERO
+const EDGE_THRESHOLD := 10.0
+
 @onready var player_units_node: Node2D = $PlayerUnits
 @onready var enemy_units_node: Node2D = $EnemyUnits
 @onready var hud: CanvasLayer = $HUD
 
 
 func _ready() -> void:
+	_recompute_zones()
+	GameData.zones_changed.connect(_on_zones_changed)
+
 	GameData.reset_game()
 	GameData.red_gold = 200
 	GameData.blue_gold = 200
-	GameData.current_wave = 1
-	GameData.game_phase = GameData.GamePhase.PREPARATION
+	GameData.game_phase = GameData.GamePhase.PLAYING
 
 	hud.red_purchase_requested.connect(_on_red_purchase_requested)
 	hud.blue_purchase_requested.connect(_on_blue_purchase_requested)
 	hud.blue_factory_requested.connect(_on_blue_factory_requested)
-	hud.start_wave_requested.connect(_on_start_wave_requested)
-	hud.stop_wave_requested.connect(_on_stop_wave_requested)
 	hud.restart_requested.connect(_on_restart_requested)
 	hud.red_gold_set_requested.connect(_on_red_gold_set_requested)
 	hud.blue_gold_set_requested.connect(_on_blue_gold_set_requested)
 
+	_create_bases()
 	queue_redraw()
 
+
+func _recompute_zones() -> void:
+	center_min = GameData.zone_rects["center"][0]
+	center_max = GameData.zone_rects["center"][1]
+	center_pos = (center_min + center_max) / 2.0
+	north_min = GameData.zone_rects["north"][0]
+	north_max = GameData.zone_rects["north"][1]
+	south_min = GameData.zone_rects["south"][0]
+	south_max = GameData.zone_rects["south"][1]
+	west_min = GameData.zone_rects["west"][0]
+	west_max = GameData.zone_rects["west"][1]
+	east_min = GameData.zone_rects["east"][0]
+	east_max = GameData.zone_rects["east"][1]
+
+
+func _on_zones_changed() -> void:
+	_recompute_zones()
+	queue_redraw()
+
+
+# --- Bases ---
+
+func _create_bases() -> void:
+	# 4 red bases behind each side zone
+	var base_offset := 30.0
+	var red_positions := {
+		"north": Vector2((north_min.x + north_max.x) / 2.0, north_min.y - base_offset),
+		"south": Vector2((south_min.x + south_max.x) / 2.0, south_max.y + base_offset),
+		"west":  Vector2(west_min.x - base_offset, (west_min.y + west_max.y) / 2.0),
+		"east":  Vector2(east_max.x + base_offset, (east_min.y + east_max.y) / 2.0),
+	}
+	for zone_name in red_positions:
+		var base := Node2D.new()
+		base.set_script(BASE_SCRIPT)
+		base.position = red_positions[zone_name]
+		base.team = GameData.Team.RED
+		base.destroyed.connect(_on_base_destroyed)
+		add_child(base)
+		GameData.red_bases.append(base)
+
+	# 1 blue base in center
+	var bb := Node2D.new()
+	bb.set_script(BASE_SCRIPT)
+	bb.position = center_pos
+	bb.team = GameData.Team.BLUE
+	bb.attack_range_rect = Rect2(center_min, center_max - center_min)
+	bb.destroyed.connect(_on_base_destroyed)
+	add_child(bb)
+	GameData.blue_base = bb
+
+
+func _on_base_destroyed(base_node: Node2D) -> void:
+	if base_node.team == GameData.Team.RED:
+		GameData.red_bases.erase(base_node)
+		if GameData.red_bases.is_empty():
+			GameData.game_phase = GameData.GamePhase.WIN
+	else:
+		GameData.blue_base = null
+		GameData.game_phase = GameData.GamePhase.GAME_OVER
+
+
+# --- Purchase / placement ---
 
 func _on_red_purchase_requested(unit_type: int) -> void:
 	var cost := GameData.get_unit_cost(GameData.Team.RED, unit_type as GameData.UnitType)
@@ -84,61 +152,37 @@ func _on_blue_factory_requested() -> void:
 		GameData.blue_factories += 1
 
 
-func _on_start_wave_requested() -> void:
-	if GameData.game_phase != GameData.GamePhase.PREPARATION:
-		return
-	placement_mode = false
-	dragging_unit = null
-	hud.show_placement_hint(false)
-	for unit in GameData.red_units:
-		if is_instance_valid(unit):
-			unit.save_spawn_position()
-	for unit in GameData.blue_units:
-		if is_instance_valid(unit):
-			unit.save_spawn_position()
-	GameData.start_battle()
-	queue_redraw()
-
-
-func _on_stop_wave_requested() -> void:
-	if GameData.game_phase != GameData.GamePhase.BATTLE:
-		return
-	for child in get_children():
-		if child is Node2D and child != player_units_node and child != enemy_units_node:
-			if child.get_script() and child.get_script().resource_path.ends_with("projectile.gd"):
-				child.queue_free()
-	for unit in GameData.red_units:
-		if is_instance_valid(unit):
-			unit.reset_to_spawn()
-	for unit in GameData.blue_units:
-		if is_instance_valid(unit):
-			unit.reset_to_spawn()
-	GameData.game_phase = GameData.GamePhase.PREPARATION
-	queue_redraw()
-
-
 func _on_restart_requested() -> void:
 	for child in player_units_node.get_children():
 		child.queue_free()
 	for child in enemy_units_node.get_children():
 		child.queue_free()
-	for child in get_children():
-		if child is Node2D and child != player_units_node and child != enemy_units_node:
-			if child.get_script() and child.get_script().resource_path.ends_with("projectile.gd"):
-				child.queue_free()
+	# Remove old bases
+	for b in GameData.red_bases:
+		if is_instance_valid(b):
+			b.queue_free()
+	if is_instance_valid(GameData.blue_base):
+		GameData.blue_base.queue_free()
 
 	GameData.reset_game()
 	GameData.red_gold = 200
 	GameData.blue_gold = 200
-	GameData.current_wave = 1
-	GameData.game_phase = GameData.GamePhase.PREPARATION
+
 	placement_mode = false
 	dragging_unit = null
+
+	# Recreate bases before setting phase (which triggers HUD update)
+	_create_bases()
+	GameData.game_phase = GameData.GamePhase.PLAYING
 	queue_redraw()
 
 
 func _unhandled_input(event: InputEvent) -> void:
-	if GameData.game_phase != GameData.GamePhase.PREPARATION:
+	# Zone edge dragging when F1 debug panel is visible (works in any phase)
+	if hud.debug_panel.visible and _handle_zone_edit_input(event):
+		return
+
+	if GameData.game_phase != GameData.GamePhase.PLAYING:
 		return
 
 	if placement_mode:
@@ -157,18 +201,20 @@ func _handle_placement_input(event: InputEvent) -> void:
 				placement_type as GameData.UnitType
 			)
 			if placement_team == GameData.Team.RED:
-				var red_lane := _get_red_zone_lane_at(pos)
-				if red_lane >= 0 and not _is_position_overlapping(pos):
+				# Red places on side zones
+				var side_lane := _get_side_lane_at(pos)
+				if side_lane >= 0 and not _is_position_overlapping(pos):
 					if GameData.spend_gold(GameData.Team.RED, cost):
-						_spawn_red_unit(placement_type, pos, red_lane)
+						_spawn_red_unit(placement_type, pos, side_lane)
 					if GameData.red_gold < cost:
 						placement_mode = false
 						hud.show_placement_hint(false)
 			else:
-				var zone := _get_blue_zone_at(pos)
-				if zone >= 0 and not _is_position_overlapping(pos):
+				# Blue places in center zone
+				var center_lane := _get_center_lane_at(pos)
+				if center_lane >= 0 and not _is_position_overlapping(pos):
 					if GameData.spend_gold(GameData.Team.BLUE, cost):
-						_spawn_blue_unit(placement_type, pos)
+						_spawn_blue_unit(placement_type, pos, center_lane)
 					if GameData.blue_gold < cost:
 						placement_mode = false
 						hud.show_placement_hint(false)
@@ -205,7 +251,7 @@ func _handle_drag_input(event: InputEvent) -> void:
 			else:
 				var pos := get_global_mouse_position()
 				var unit := _find_unit_at(pos)
-				if unit:
+				if unit and not unit.get("is_base"):
 					_sell_unit(unit)
 					queue_redraw()
 					get_viewport().set_input_as_handled()
@@ -215,16 +261,21 @@ func _handle_drag_input(event: InputEvent) -> void:
 			if dragging_unit and is_instance_valid(dragging_unit):
 				var pos := get_global_mouse_position()
 				var target_pos := pos + drag_offset
-				if dragging_unit.team == GameData.Team.RED:
-					target_pos = _clamp_to_nearest_red_zone(target_pos)
+				if dragging_unit.get("is_base"):
+					# ponytail: bases drop anywhere, no clamping
+					pass
+				elif dragging_unit.team == GameData.Team.RED:
+					target_pos = _clamp_to_nearest_side_zone(target_pos)
 					if _is_position_overlapping(target_pos, dragging_unit):
 						target_pos = drag_original_pos
 					else:
-						dragging_unit.lane = _get_red_zone_lane_at(target_pos)
+						dragging_unit.lane = _get_side_lane_at(target_pos)
 				else:
-					target_pos = _clamp_to_nearest_blue_zone(target_pos)
+					target_pos = _clamp_to_center_zone(target_pos)
 					if _is_position_overlapping(target_pos, dragging_unit):
 						target_pos = drag_original_pos
+					else:
+						dragging_unit.lane = _get_center_lane_at(target_pos)
 				dragging_unit.position = target_pos
 				dragging_unit.queue_redraw()
 				dragging_unit = null
@@ -234,9 +285,9 @@ func _handle_drag_input(event: InputEvent) -> void:
 	elif event is InputEventMouseMotion and dragging_unit and is_instance_valid(dragging_unit):
 		var pos := get_global_mouse_position()
 		dragging_unit.position = pos + drag_offset
-		if dragging_unit.team == GameData.Team.RED:
-			var clamped_pos := _clamp_to_nearest_red_zone(dragging_unit.position)
-			var new_lane := _get_red_zone_lane_at(clamped_pos)
+		if not dragging_unit.get("is_base") and dragging_unit.team == GameData.Team.BLUE:
+			var clamped_pos := _clamp_to_center_zone(dragging_unit.position)
+			var new_lane := _get_center_lane_at(clamped_pos)
 			if new_lane >= 0 and dragging_unit.lane != new_lane:
 				dragging_unit.lane = new_lane
 				dragging_unit.queue_redraw()
@@ -259,19 +310,19 @@ func _is_position_overlapping(pos: Vector2, exclude_unit: Node2D = null) -> bool
 
 # --- Zone clamping ---
 
-func _clamp_to_nearest_red_zone(pos: Vector2) -> Vector2:
+func _clamp_to_center_zone(pos: Vector2) -> Vector2:
 	return Vector2(
-		clampf(pos.x, RED_MIN.x, RED_MAX.x),
-		clampf(pos.y, RED_MIN.y, RED_MAX.y)
+		clampf(pos.x, center_min.x, center_max.x),
+		clampf(pos.y, center_min.y, center_max.y)
 	)
 
 
-func _clamp_to_nearest_blue_zone(pos: Vector2) -> Vector2:
+func _clamp_to_nearest_side_zone(pos: Vector2) -> Vector2:
 	var zones := [
-		[NORTH_MIN, NORTH_MAX],
-		[SOUTH_MIN, SOUTH_MAX],
-		[EAST_MIN, EAST_MAX],
-		[WEST_MIN, WEST_MAX],
+		[north_min, north_max],
+		[south_min, south_max],
+		[east_min, east_max],
+		[west_min, west_max],
 	]
 	var best_pos := pos
 	var best_dist := INF
@@ -296,6 +347,8 @@ func _sell_unit(unit: Node2D) -> void:
 	unit.queue_free()
 
 
+const BASE_CLICK_RADIUS := 20.0
+
 func _find_unit_at(pos: Vector2) -> Node2D:
 	var closest: Node2D = null
 	var closest_dist: float = UNIT_CLICK_RADIUS
@@ -311,34 +364,23 @@ func _find_unit_at(pos: Vector2) -> Node2D:
 			if dist < closest_dist:
 				closest_dist = dist
 				closest = unit
+	# Also check bases (larger click radius)
+	for b in GameData.red_bases:
+		if is_instance_valid(b):
+			var dist := pos.distance_to(b.global_position)
+			if dist < BASE_CLICK_RADIUS and dist < closest_dist:
+				closest_dist = dist
+				closest = b
+	if is_instance_valid(GameData.blue_base):
+		var dist := pos.distance_to(GameData.blue_base.global_position)
+		if dist < BASE_CLICK_RADIUS and dist < closest_dist:
+			closest = GameData.blue_base
 	return closest
 
 
 func _process(_delta: float) -> void:
-	if placement_mode or dragging_unit:
+	if placement_mode or dragging_unit or zone_dragging:
 		queue_redraw()
-
-	if GameData.game_phase == GameData.GamePhase.BATTLE:
-		_check_battle_end()
-
-
-func _check_battle_end() -> void:
-	var blue_alive := not GameData.blue_units.is_empty()
-	var red_alive := not GameData.red_units.is_empty()
-
-	if not blue_alive or not red_alive:
-		_on_round_ended()
-
-
-func _on_round_ended() -> void:
-	for unit in GameData.red_units:
-		if is_instance_valid(unit):
-			unit.reset_to_spawn()
-	for unit in GameData.blue_units:
-		if is_instance_valid(unit):
-			unit.reset_to_spawn()
-
-	GameData.start_preparation()
 
 
 func _spawn_red_unit(unit_type: int, pos: Vector2, lane: int) -> void:
@@ -350,21 +392,22 @@ func _spawn_red_unit(unit_type: int, pos: Vector2, lane: int) -> void:
 	player_units_node.add_child(unit)
 
 
-func _spawn_blue_unit(unit_type: int, pos: Vector2) -> void:
+func _spawn_blue_unit(unit_type: int, pos: Vector2, lane: int) -> void:
 	var unit := UNIT_SCENE.instantiate()
 	unit.unit_type = unit_type
 	unit.team = GameData.Team.BLUE
+	unit.lane = lane
 	unit.position = pos
 	enemy_units_node.add_child(unit)
 
 
-# --- Red zone lane detection ---
+# --- Center zone lane detection (for blue units) ---
 
-func _get_red_zone_lane_at(pos: Vector2) -> int:
-	if not _is_in_rect(pos, RED_MIN, RED_MAX):
+func _get_center_lane_at(pos: Vector2) -> int:
+	if not _is_in_rect(pos, center_min, center_max):
 		return -1
-	var dx := pos.x - RED_CENTER.x
-	var dy := pos.y - RED_CENTER.y
+	var dx := pos.x - center_pos.x
+	var dy := pos.y - center_pos.y
 	if absf(dy) >= absf(dx):
 		return GameData.Lane.NORTH if dy < 0 else GameData.Lane.SOUTH
 	else:
@@ -376,63 +419,146 @@ func _is_in_rect(pos: Vector2, rect_min: Vector2, rect_max: Vector2) -> bool:
 		and pos.y >= rect_min.y and pos.y <= rect_max.y
 
 
-# --- Blue zone checks ---
+# --- Side zone detection (for red units) ---
 
-func _get_blue_zone_at(pos: Vector2) -> int:
-	if _is_in_rect(pos, NORTH_MIN, NORTH_MAX): return GameData.Lane.NORTH
-	if _is_in_rect(pos, EAST_MIN, EAST_MAX): return GameData.Lane.EAST
-	if _is_in_rect(pos, SOUTH_MIN, SOUTH_MAX): return GameData.Lane.SOUTH
-	if _is_in_rect(pos, WEST_MIN, WEST_MAX): return GameData.Lane.WEST
+func _get_side_lane_at(pos: Vector2) -> int:
+	if _is_in_rect(pos, north_min, north_max): return GameData.Lane.NORTH
+	if _is_in_rect(pos, east_min, east_max): return GameData.Lane.EAST
+	if _is_in_rect(pos, south_min, south_max): return GameData.Lane.SOUTH
+	if _is_in_rect(pos, west_min, west_max): return GameData.Lane.WEST
 	return -1
+
+
+# --- Zone edge dragging ---
+
+func _handle_zone_edit_input(event: InputEvent) -> bool:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			var pos := get_global_mouse_position()
+			var hit := _detect_zone_edge(pos)
+			if not hit.is_empty():
+				zone_dragging = true
+				zone_drag_zone = hit[0]
+				zone_drag_side = hit[1]
+				zone_drag_start = pos
+				get_viewport().set_input_as_handled()
+				return true
+		else:
+			if zone_dragging:
+				zone_dragging = false
+				get_viewport().set_input_as_handled()
+				return true
+
+	elif event is InputEventMouseMotion and zone_dragging:
+		_apply_zone_drag(get_global_mouse_position())
+		get_viewport().set_input_as_handled()
+		return true
+
+	return false
+
+
+func _detect_zone_edge(pos: Vector2) -> Array:
+	var t := EDGE_THRESHOLD
+	# Check all 4 edges of every zone
+	for zone_name in GameData.zone_rects:
+		var r: Array = GameData.zone_rects[zone_name]
+		var zmin: Vector2 = r[0]
+		var zmax: Vector2 = r[1]
+		var in_x := pos.x >= zmin.x - t and pos.x <= zmax.x + t
+		var in_y := pos.y >= zmin.y - t and pos.y <= zmax.y + t
+		if in_x and absf(pos.y - zmin.y) < t: return [zone_name, "top"]
+		if in_x and absf(pos.y - zmax.y) < t: return [zone_name, "bottom"]
+		if in_y and absf(pos.x - zmin.x) < t: return [zone_name, "left"]
+		if in_y and absf(pos.x - zmax.x) < t: return [zone_name, "right"]
+	# Body drag for any zone
+	for zone_name in GameData.zone_rects:
+		var r: Array = GameData.zone_rects[zone_name]
+		if _is_in_rect(pos, r[0], r[1]): return [zone_name, "body"]
+	return []
+
+
+func _apply_zone_drag(pos: Vector2) -> void:
+	var r: Array = GameData.zone_rects[zone_drag_zone]
+	var min_size := 20.0
+	match zone_drag_side:
+		"top":    r[0].y = minf(pos.y, r[1].y - min_size)
+		"bottom": r[1].y = maxf(pos.y, r[0].y + min_size)
+		"left":   r[0].x = minf(pos.x, r[1].x - min_size)
+		"right":  r[1].x = maxf(pos.x, r[0].x + min_size)
+		"body":
+			var delta := pos - zone_drag_start
+			r[0] += delta
+			r[1] += delta
+			zone_drag_start = pos
+	_recompute_zones()
+	queue_redraw()
+
+
+func _draw_zone_handles() -> void:
+	var hs := 6.0
+	var colors := {
+		"center": Color(1, 1, 0, 0.8),
+		"north": Color(1, 0.5, 0, 0.8), "south": Color(1, 0.5, 0, 0.8),
+		"west": Color(1, 0.5, 0, 0.8), "east": Color(1, 0.5, 0, 0.8),
+	}
+	for zone_name in GameData.zone_rects:
+		var r: Array = GameData.zone_rects[zone_name]
+		var zmin: Vector2 = r[0]
+		var zmax: Vector2 = r[1]
+		var cx := (zmin.x + zmax.x) / 2.0
+		var cy := (zmin.y + zmax.y) / 2.0
+		var c: Color = colors[zone_name]
+		_draw_handle(Vector2(cx, zmin.y), hs, c)
+		_draw_handle(Vector2(cx, zmax.y), hs, c)
+		_draw_handle(Vector2(zmin.x, cy), hs, c)
+		_draw_handle(Vector2(zmax.x, cy), hs, c)
+
+
+func _draw_handle(pos: Vector2, size: float, color: Color) -> void:
+	draw_rect(Rect2(pos.x - size / 2.0, pos.y - size / 2.0, size, size), color)
 
 
 # --- Drawing ---
 
 func _draw() -> void:
-	# Dark background
 	draw_rect(Rect2(0, 0, 1280, 720), Color(0.08, 0.09, 0.12))
 
-	# Red zone (single 300x300 square)
+	# Blue = center
+	draw_rect(Rect2(center_min, center_max - center_min), Color(0.12, 0.14, 0.22))
+
+	# Red = sides
 	var red_tint := Color(0.22, 0.12, 0.12)
-	draw_rect(Rect2(RED_MIN, RED_MAX - RED_MIN), red_tint)
+	draw_rect(Rect2(north_min, north_max - north_min), red_tint)
+	draw_rect(Rect2(south_min, south_max - south_min), red_tint)
+	draw_rect(Rect2(east_min, east_max - east_min), red_tint)
+	draw_rect(Rect2(west_min, west_max - west_min), red_tint)
 
-	# Blue zones (4 squares)
-	var blue_tint := Color(0.12, 0.14, 0.22)
-	draw_rect(Rect2(NORTH_MIN, NORTH_MAX - NORTH_MIN), blue_tint)
-	draw_rect(Rect2(SOUTH_MIN, SOUTH_MAX - SOUTH_MIN), blue_tint)
-	draw_rect(Rect2(EAST_MIN, EAST_MAX - EAST_MIN), blue_tint)
-	draw_rect(Rect2(WEST_MIN, WEST_MAX - WEST_MIN), blue_tint)
-
-	# Zone borders
+	# Borders
 	var border_color := Color(0.3, 0.3, 0.4)
-	_draw_zone_border(RED_MIN, RED_MAX, border_color)
-	_draw_zone_border(NORTH_MIN, NORTH_MAX, border_color)
-	_draw_zone_border(SOUTH_MIN, SOUTH_MAX, border_color)
-	_draw_zone_border(EAST_MIN, EAST_MAX, border_color)
-	_draw_zone_border(WEST_MIN, WEST_MAX, border_color)
+	_draw_zone_border(center_min, center_max, border_color)
+	_draw_zone_border(north_min, north_max, border_color)
+	_draw_zone_border(south_min, south_max, border_color)
+	_draw_zone_border(east_min, east_max, border_color)
+	_draw_zone_border(west_min, west_max, border_color)
 
-	# Zone labels (centered in each 100x100 square)
+	# Labels
 	var font := ThemeDB.fallback_font
-	var red_label_color := Color(0.5, 0.3, 0.3, 0.7)
-	var blue_label_color := Color(0.3, 0.3, 0.5, 0.7)
-
-	# Red zone label
-	_draw_zone_label(font, RED_MIN, RED_MAX, "RED", red_label_color)
-
-	# Blue zone labels
-	_draw_zone_label(font, NORTH_MIN, NORTH_MAX, "N", blue_label_color)
-	_draw_zone_label(font, SOUTH_MIN, SOUTH_MAX, "S", blue_label_color)
-	_draw_zone_label(font, EAST_MIN, EAST_MAX, "E", blue_label_color)
-	_draw_zone_label(font, WEST_MIN, WEST_MAX, "O", blue_label_color)
+	var red_lc := Color(0.5, 0.3, 0.3, 0.7)
+	var blue_lc := Color(0.3, 0.3, 0.5, 0.7)
+	_draw_zone_label(font, center_min, center_max, "BLUE", blue_lc)
+	_draw_zone_label(font, north_min, north_max, "N", red_lc)
+	_draw_zone_label(font, south_min, south_max, "S", red_lc)
+	_draw_zone_label(font, east_min, east_max, "E", red_lc)
+	_draw_zone_label(font, west_min, west_max, "O", red_lc)
 
 	# Placement ghost
-	if placement_mode and GameData.game_phase == GameData.GamePhase.PREPARATION:
+	if placement_mode and GameData.game_phase == GameData.GamePhase.PLAYING:
 		var mouse_pos := get_local_mouse_position()
 		var in_zone: bool
 		if placement_team == GameData.Team.RED:
-			in_zone = _get_red_zone_lane_at(mouse_pos) >= 0
+			in_zone = _get_side_lane_at(mouse_pos) >= 0
 		else:
-			in_zone = _get_blue_zone_at(mouse_pos) >= 0
+			in_zone = _get_center_lane_at(mouse_pos) >= 0
 
 		var overlapping := in_zone and _is_position_overlapping(mouse_pos)
 
@@ -457,16 +583,20 @@ func _draw() -> void:
 
 	# Drag highlight
 	if dragging_unit and is_instance_valid(dragging_unit) \
-			and GameData.game_phase == GameData.GamePhase.PREPARATION:
+			and GameData.game_phase == GameData.GamePhase.PLAYING:
 		var unit_pos := dragging_unit.position
 		var clamped_pos: Vector2
 		if dragging_unit.team == GameData.Team.RED:
-			clamped_pos = _clamp_to_nearest_red_zone(unit_pos)
+			clamped_pos = _clamp_to_nearest_side_zone(unit_pos)
 		else:
-			clamped_pos = _clamp_to_nearest_blue_zone(unit_pos)
+			clamped_pos = _clamp_to_center_zone(unit_pos)
 		var is_overlap := _is_position_overlapping(clamped_pos, dragging_unit)
 		var highlight_color := Color(1, 0.2, 0.2, 0.7) if is_overlap else Color(1, 1, 0, 0.7)
 		draw_arc(unit_pos, 10.0, 0, TAU, 32, highlight_color, 1.0)
+
+	# Zone edit handles when F1 is visible
+	if hud.debug_panel.visible:
+		_draw_zone_handles()
 
 
 func _draw_zone_label(font: Font, zmin: Vector2, zmax: Vector2, text: String, color: Color) -> void:

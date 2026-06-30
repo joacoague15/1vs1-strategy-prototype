@@ -23,9 +23,7 @@ const UNIT_MIN_DISTANCE := 16.0
 var placement_mode: bool = false
 var placement_type: int = -1
 var placement_team: int = GameData.Team.RED
-var dragging_unit: Node2D = null
-var drag_offset: Vector2 = Vector2.ZERO
-var drag_original_pos: Vector2 = Vector2.ZERO
+var selected_unit: Node2D = null  # ponytail: blue RTS select+move
 
 # Zone edge dragging (active when F1 panel visible)
 var zone_dragging: bool = false
@@ -44,16 +42,11 @@ func _ready() -> void:
 	GameData.zones_changed.connect(_on_zones_changed)
 
 	GameData.reset_game()
-	GameData.red_gold = 200
-	GameData.blue_gold = 200
 	GameData.game_phase = GameData.GamePhase.PLAYING
 
 	hud.red_purchase_requested.connect(_on_red_purchase_requested)
 	hud.blue_purchase_requested.connect(_on_blue_purchase_requested)
-	hud.blue_factory_requested.connect(_on_blue_factory_requested)
 	hud.restart_requested.connect(_on_restart_requested)
-	hud.red_gold_set_requested.connect(_on_red_gold_set_requested)
-	hud.blue_gold_set_requested.connect(_on_blue_gold_set_requested)
 
 	_create_bases()
 	queue_redraw()
@@ -81,23 +74,6 @@ func _on_zones_changed() -> void:
 # --- Bases ---
 
 func _create_bases() -> void:
-	# 4 red bases behind each side zone
-	var base_offset := 30.0
-	var red_positions := {
-		"north": Vector2((north_min.x + north_max.x) / 2.0, north_min.y - base_offset),
-		"south": Vector2((south_min.x + south_max.x) / 2.0, south_max.y + base_offset),
-		"west":  Vector2(west_min.x - base_offset, (west_min.y + west_max.y) / 2.0),
-		"east":  Vector2(east_max.x + base_offset, (east_min.y + east_max.y) / 2.0),
-	}
-	for zone_name in red_positions:
-		var base := Node2D.new()
-		base.set_script(BASE_SCRIPT)
-		base.position = red_positions[zone_name]
-		base.team = GameData.Team.RED
-		base.destroyed.connect(_on_base_destroyed)
-		add_child(base)
-		GameData.red_bases.append(base)
-
 	# 1 blue base in center
 	var bb := Node2D.new()
 	bb.set_script(BASE_SCRIPT)
@@ -110,46 +86,24 @@ func _create_bases() -> void:
 
 
 func _on_base_destroyed(base_node: Node2D) -> void:
-	if base_node.team == GameData.Team.RED:
-		GameData.red_bases.erase(base_node)
-		if GameData.red_bases.is_empty():
-			GameData.game_phase = GameData.GamePhase.WIN
-	else:
-		GameData.blue_base = null
-		GameData.game_phase = GameData.GamePhase.GAME_OVER
+	GameData.blue_base = null
+	GameData.game_phase = GameData.GamePhase.GAME_OVER
 
 
 # --- Purchase / placement ---
 
 func _on_red_purchase_requested(unit_type: int) -> void:
-	var cost := GameData.get_unit_cost(GameData.Team.RED, unit_type as GameData.UnitType)
-	if GameData.red_gold >= cost:
-		placement_mode = true
-		placement_type = unit_type
-		placement_team = GameData.Team.RED
-		hud.show_placement_hint(true, GameData.Team.RED)
+	placement_mode = true
+	placement_type = unit_type
+	placement_team = GameData.Team.RED
+	hud.show_placement_hint(true, GameData.Team.RED)
 
 
 func _on_blue_purchase_requested(unit_type: int) -> void:
-	var cost := GameData.get_unit_cost(GameData.Team.BLUE, unit_type as GameData.UnitType)
-	if GameData.blue_gold >= cost:
-		placement_mode = true
-		placement_type = unit_type
-		placement_team = GameData.Team.BLUE
-		hud.show_placement_hint(true, GameData.Team.BLUE)
-
-
-func _on_red_gold_set_requested(amount: int) -> void:
-	GameData.red_gold = clampi(amount, 0, 9999)
-
-
-func _on_blue_gold_set_requested(amount: int) -> void:
-	GameData.blue_gold = clampi(amount, 0, 9999)
-
-
-func _on_blue_factory_requested() -> void:
-	if GameData.spend_gold(GameData.Team.BLUE, GameData.FACTORY_COST):
-		GameData.blue_factories += 1
+	placement_mode = true
+	placement_type = unit_type
+	placement_team = GameData.Team.BLUE
+	hud.show_placement_hint(true, GameData.Team.BLUE)
 
 
 func _on_restart_requested() -> void:
@@ -157,19 +111,13 @@ func _on_restart_requested() -> void:
 		child.queue_free()
 	for child in enemy_units_node.get_children():
 		child.queue_free()
-	# Remove old bases
-	for b in GameData.red_bases:
-		if is_instance_valid(b):
-			b.queue_free()
 	if is_instance_valid(GameData.blue_base):
 		GameData.blue_base.queue_free()
 
 	GameData.reset_game()
-	GameData.red_gold = 200
-	GameData.blue_gold = 200
 
 	placement_mode = false
-	dragging_unit = null
+	_select_unit(null)
 
 	# Recreate bases before setting phase (which triggers HUD update)
 	_create_bases()
@@ -189,37 +137,25 @@ func _unhandled_input(event: InputEvent) -> void:
 		_handle_placement_input(event)
 		return
 
-	_handle_drag_input(event)
+	_handle_select_input(event)
 
 
 func _handle_placement_input(event: InputEvent) -> void:
 	if event is InputEventMouseButton and event.pressed:
 		if event.button_index == MOUSE_BUTTON_LEFT:
 			var pos := get_global_mouse_position()
-			var cost := GameData.get_unit_cost(
-				placement_team as GameData.Team,
-				placement_type as GameData.UnitType
-			)
 			if placement_team == GameData.Team.RED:
 				var side_lane := _get_side_lane_at(pos)
 				if side_lane >= 0:
 					var cell_pos := _snap_red_grid(pos)
 					if not _is_cell_occupied(cell_pos, GameData.Team.RED):
-						if GameData.spend_gold(GameData.Team.RED, cost):
-							_spawn_red_unit(placement_type, cell_pos, _get_side_lane_at(cell_pos))
-						if GameData.red_gold < cost:
-							placement_mode = false
-							hud.show_placement_hint(false)
+						_spawn_red_unit(placement_type, cell_pos, _get_side_lane_at(cell_pos))
 			else:
 				var center_lane := _get_center_lane_at(pos)
 				if center_lane >= 0:
 					var cell_pos := _snap_blue_grid(pos)
 					if not _is_cell_occupied(cell_pos, GameData.Team.BLUE):
-						if GameData.spend_gold(GameData.Team.BLUE, cost):
-							_spawn_blue_unit(placement_type, cell_pos, _get_center_lane_at(cell_pos))
-						if GameData.blue_gold < cost:
-							placement_mode = false
-							hud.show_placement_hint(false)
+						_spawn_blue_unit(placement_type, cell_pos, _get_center_lane_at(cell_pos))
 			get_viewport().set_input_as_handled()
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
 			placement_mode = false
@@ -231,75 +167,38 @@ func _handle_placement_input(event: InputEvent) -> void:
 		get_viewport().set_input_as_handled()
 
 
-func _handle_drag_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton and event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if dragging_unit:
-				return
-			var pos := get_global_mouse_position()
-			# Click on red zone → launch that lane
-			var launch_lane := _get_side_lane_at(pos)
-			if launch_lane >= 0:
-				_launch_red_lane(launch_lane)
-				get_viewport().set_input_as_handled()
-				return
-			var unit := _find_unit_at(pos)
-			if unit and not unit.get("attacking"):
-				dragging_unit = unit
-				drag_offset = unit.position - pos
-				drag_original_pos = unit.position
-				get_viewport().set_input_as_handled()
+func _handle_select_input(event: InputEvent) -> void:
+	if not (event is InputEventMouseButton and event.pressed):
+		return
+	var pos := get_global_mouse_position()
+	if event.button_index == MOUSE_BUTTON_LEFT:
+		_select_unit(_find_blue_unit_at(pos))
+	elif event.button_index == MOUSE_BUTTON_RIGHT:
+		if selected_unit and is_instance_valid(selected_unit):
+			selected_unit.set_move_target(pos)
+			queue_redraw()
 
-		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			if dragging_unit and is_instance_valid(dragging_unit):
-				dragging_unit.position = drag_original_pos
-				dragging_unit = null
-				queue_redraw()
-				get_viewport().set_input_as_handled()
-			else:
-				var pos := get_global_mouse_position()
-				var unit := _find_unit_at(pos)
-				if unit and not unit.get("is_base"):
-					_sell_unit(unit)
-					queue_redraw()
-					get_viewport().set_input_as_handled()
 
-	elif event is InputEventMouseButton and not event.pressed:
-		if event.button_index == MOUSE_BUTTON_LEFT:
-			if dragging_unit and is_instance_valid(dragging_unit):
-				var pos := get_global_mouse_position()
-				var target_pos := pos + drag_offset
-				if dragging_unit.get("is_base"):
-					# ponytail: bases drop anywhere, no clamping
-					pass
-				elif dragging_unit.team == GameData.Team.RED:
-					target_pos = _snap_red_grid(target_pos)
-					if _is_cell_occupied(target_pos, GameData.Team.RED, dragging_unit):
-						target_pos = drag_original_pos
-					else:
-						dragging_unit.lane = _get_side_lane_at(target_pos)
-				else:
-					target_pos = _snap_blue_grid(target_pos)
-					if _is_cell_occupied(target_pos, GameData.Team.BLUE, dragging_unit):
-						target_pos = drag_original_pos
-					else:
-						dragging_unit.lane = _get_center_lane_at(target_pos)
-				dragging_unit.position = target_pos
-				dragging_unit.queue_redraw()
-				dragging_unit = null
-				queue_redraw()
-				get_viewport().set_input_as_handled()
+func _select_unit(unit: Node2D) -> void:
+	if selected_unit and is_instance_valid(selected_unit):
+		selected_unit.selected = false
+		selected_unit.queue_redraw()
+	selected_unit = unit
+	if unit:
+		unit.selected = true
+		unit.queue_redraw()
 
-	elif event is InputEventMouseMotion and dragging_unit and is_instance_valid(dragging_unit):
-		var pos := get_global_mouse_position()
-		dragging_unit.position = pos + drag_offset
-		if not dragging_unit.get("is_base") and dragging_unit.team == GameData.Team.BLUE:
-			var clamped_pos := _clamp_to_center_zone(dragging_unit.position)
-			var new_lane := _get_center_lane_at(clamped_pos)
-			if new_lane >= 0 and dragging_unit.lane != new_lane:
-				dragging_unit.lane = new_lane
-				dragging_unit.queue_redraw()
-		get_viewport().set_input_as_handled()
+
+func _find_blue_unit_at(pos: Vector2) -> Node2D:
+	var closest: Node2D = null
+	var closest_dist: float = UNIT_CLICK_RADIUS
+	for u in GameData.blue_units:
+		if is_instance_valid(u):
+			var dist := pos.distance_to(u.global_position)
+			if dist < closest_dist:
+				closest_dist = dist
+				closest = u
+	return closest
 
 
 # --- Overlap detection ---
@@ -394,53 +293,9 @@ func _clamp_to_nearest_side_zone(pos: Vector2) -> Vector2:
 	return best_pos
 
 
-func _sell_unit(unit: Node2D) -> void:
-	var team_enum: GameData.Team = unit.team as GameData.Team
-	GameData.add_gold(team_enum, unit.unit_cost / 2)
-	GameData.unregister_unit(unit, team_enum)
-	unit.queue_free()
-
-
-const BASE_CLICK_RADIUS := 20.0
-
-func _find_unit_at(pos: Vector2) -> Node2D:
-	var closest: Node2D = null
-	var closest_dist: float = UNIT_CLICK_RADIUS
-	for unit in GameData.red_units:
-		if is_instance_valid(unit):
-			var dist := pos.distance_to(unit.global_position)
-			if dist < closest_dist:
-				closest_dist = dist
-				closest = unit
-	for unit in GameData.blue_units:
-		if is_instance_valid(unit):
-			var dist := pos.distance_to(unit.global_position)
-			if dist < closest_dist:
-				closest_dist = dist
-				closest = unit
-	# Also check bases (larger click radius)
-	for b in GameData.red_bases:
-		if is_instance_valid(b):
-			var dist := pos.distance_to(b.global_position)
-			if dist < BASE_CLICK_RADIUS and dist < closest_dist:
-				closest_dist = dist
-				closest = b
-	if is_instance_valid(GameData.blue_base):
-		var dist := pos.distance_to(GameData.blue_base.global_position)
-		if dist < BASE_CLICK_RADIUS and dist < closest_dist:
-			closest = GameData.blue_base
-	return closest
-
-
 func _process(_delta: float) -> void:
-	if placement_mode or dragging_unit or zone_dragging:
+	if placement_mode or zone_dragging or (selected_unit and is_instance_valid(selected_unit) and selected_unit.moving):
 		queue_redraw()
-
-
-func _launch_red_lane(lane: int) -> void:
-	for unit in GameData.red_units:
-		if is_instance_valid(unit) and unit.lane == lane and not unit.attacking:
-			unit.attacking = true
 
 
 func _spawn_red_unit(unit_type: int, pos: Vector2, lane: int) -> void:
@@ -634,6 +489,9 @@ func _draw() -> void:
 	# Placement ghost
 	if placement_mode and GameData.game_phase == GameData.GamePhase.PLAYING:
 		var mouse_pos := get_local_mouse_position()
+		var ghalf := GameData.BLUE_CELL_SIZE * 0.4
+
+		# Unit placement ghost
 		var in_zone: bool
 		var ghost_pos := mouse_pos
 		var overlapping: bool
@@ -661,27 +519,15 @@ func _draw() -> void:
 		else:
 			ghost_color.a = 0.5
 
-		var ghalf := GameData.BLUE_CELL_SIZE * 0.4
 		draw_rect(Rect2(ghost_pos.x - ghalf, ghost_pos.y - ghalf, ghalf * 2, ghalf * 2), ghost_color)
 		if in_zone and not overlapping:
 			var outline := Color.WHITE if placement_team == GameData.Team.RED else Color(0.3, 0.5, 1.0)
 			outline.a = 0.5
 			draw_rect(Rect2(ghost_pos.x - ghalf, ghost_pos.y - ghalf, ghalf * 2, ghalf * 2), outline, false, 0.75)
 
-	# Drag highlight
-	if dragging_unit and is_instance_valid(dragging_unit) \
-			and GameData.game_phase == GameData.GamePhase.PLAYING:
-		var unit_pos := dragging_unit.position
-		var snap_pos: Vector2
-		var team_id: int = dragging_unit.team
-		if team_id == GameData.Team.RED:
-			snap_pos = _snap_red_grid(unit_pos)
-		else:
-			snap_pos = _snap_blue_grid(unit_pos)
-		var is_overlap := _is_cell_occupied(snap_pos, team_id, dragging_unit)
-		var highlight_color := Color(1, 0.2, 0.2, 0.7) if is_overlap else Color(1, 1, 0, 0.7)
-		var hs := GameData.BLUE_CELL_SIZE * 0.5
-		draw_rect(Rect2(snap_pos.x - hs, snap_pos.y - hs, hs * 2, hs * 2), highlight_color, false, 1.0)
+	# ponytail: move target indicator
+	if selected_unit and is_instance_valid(selected_unit) and selected_unit.moving:
+		draw_circle(selected_unit.move_target, 3.0, Color(1, 1, 0, 0.5))
 
 	# Zone edit handles when F1 is visible
 	if hud.debug_panel.visible:

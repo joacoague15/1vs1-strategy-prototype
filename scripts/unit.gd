@@ -12,11 +12,15 @@ var attack_range: float = 200.0
 var move_speed: float = 56.0
 var fire_cooldown: float = 0.0
 var target: Node2D = null
-var attacking: bool = false  # ponytail: red units idle until lane launched
 var unit_cost: int = 50
 var armor_type: String = "heavy"
 var bonus_vs_light: float = 0.0
 var bonus_vs_heavy: float = 0.0
+
+# ponytail: blue RTS select+move
+var move_target: Vector2 = Vector2.ZERO
+var moving: bool = false
+var selected: bool = false
 
 # --- Visual feedback state ---
 var _shot_timer: float = 0.0
@@ -96,7 +100,8 @@ func _process(delta: float) -> void:
 
 	fire_cooldown -= delta
 
-	if team == GameData.Team.RED and attacking:
+	if team == GameData.Team.RED:
+		# ponytail: red always attacks from spawn, no idle/launch flow
 		target = _find_closest_enemy()
 		if target and global_position.distance_to(target.global_position) <= attack_range:
 			if fire_cooldown <= 0.0:
@@ -109,12 +114,19 @@ func _process(delta: float) -> void:
 			var dir := (GameData.get_zone_center() - global_position).normalized()
 			position += dir * move_speed * delta
 	elif team == GameData.Team.BLUE:
-		# ponytail: blue units stay put, defend in place
-		target = _find_closest_enemy()
-		if target and global_position.distance_to(target.global_position) <= attack_range:
-			if fire_cooldown <= 0.0:
-				_shoot()
-				fire_cooldown = fire_rate
+		if moving:
+			if global_position.distance_to(move_target) < 2.0:
+				moving = false
+			else:
+				var dir := (move_target - global_position).normalized()
+				position += dir * move_speed * delta
+		else:
+			# ponytail: "si queda quieto que ataque"
+			target = _find_closest_enemy()
+			if target and global_position.distance_to(target.global_position) <= attack_range:
+				if fire_cooldown <= 0.0:
+					_shoot()
+					fire_cooldown = fire_rate
 
 	# --- Visual effect timers ---
 	var needs_redraw := false
@@ -208,6 +220,11 @@ func take_damage(dmg: float) -> void:
 		_die()
 
 
+func set_move_target(pos: Vector2) -> void:
+	move_target = pos
+	moving = true
+
+
 func _die() -> void:
 	GameData.unregister_unit(self, team as GameData.Team)
 	queue_free()
@@ -228,6 +245,10 @@ func _draw() -> void:
 	# Outline
 	var outline_color := Color.WHITE if is_red else Color(0.3, 0.5, 1.0)
 	draw_rect(sq, outline_color, false, 0.9)
+
+	# ponytail: selection ring for blue units
+	if selected:
+		draw_arc(Vector2.ZERO, half + 2.0, 0, TAU, 16, Color(1, 1, 0, 0.85), 1.5)
 
 	# Unit letter
 	var font := ThemeDB.fallback_font

@@ -5,26 +5,11 @@ enum GamePhase { PLAYING, GAME_OVER, WIN }
 enum Team { RED, BLUE }
 enum Lane { NORTH, EAST, SOUTH, WEST }
 
-signal red_gold_changed(new_amount: int)
-signal blue_gold_changed(new_amount: int)
 signal phase_changed(new_phase: GamePhase)
 signal unit_stats_changed(team: Team, unit_type: UnitType)
 signal zones_changed
 signal base_destroyed(base_node: Node2D)
 
-var red_gold: int = 0:
-	set(value):
-		red_gold = value
-		red_gold_changed.emit(red_gold)
-
-var blue_gold: int = 0:
-	set(value):
-		blue_gold = value
-		blue_gold_changed.emit(blue_gold)
-
-var blue_factories: int = 0
-var base_income: int = 50
-var factory_income: int = 25
 var game_phase: GamePhase = GamePhase.PLAYING:
 	set(value):
 		game_phase = value
@@ -34,14 +19,8 @@ var red_units: Array = []
 var blue_units: Array = []
 
 # Bases
-var red_bases: Array = []
 var blue_base: Node2D = null
 
-# Income timer
-var _income_timer: float = 0.0
-const INCOME_INTERVAL: float = 1.0
-
-const FACTORY_COST: int = 10
 const TILE_SIZE: float = 100.0
 const BLUE_CELL_SIZE: float = 20.0
 
@@ -67,16 +46,6 @@ const _TYPE_MAP := {"ALPHA": UnitType.ALPHA, "BRAVO": UnitType.BRAVO, "CHARLIE":
 
 func _ready() -> void:
 	_load_units_json()
-
-
-func _process(delta: float) -> void:
-	if game_phase != GamePhase.PLAYING:
-		return
-	_income_timer += delta
-	if _income_timer >= INCOME_INTERVAL:
-		_income_timer -= INCOME_INTERVAL
-		add_gold(Team.RED, red_income())
-		add_gold(Team.BLUE, blue_income())
 
 
 func _load_units_json() -> void:
@@ -129,10 +98,6 @@ func get_unit_data(team: Team, unit_type: UnitType) -> Dictionary:
 	return BLUE_UNITS[unit_type]
 
 
-func get_unit_cost(team: Team, unit_type: UnitType) -> int:
-	return get_unit_data(team, unit_type)["cost"]
-
-
 func get_unit_name(team: Team, unit_type: UnitType) -> String:
 	return get_unit_data(team, unit_type)["name"]
 
@@ -151,33 +116,6 @@ func notify_stats_changed(team_val: Team, unit_type_val: UnitType) -> void:
 	for unit in unit_list:
 		if is_instance_valid(unit) and unit.unit_type == unit_type_val:
 			unit.reload_stats()
-
-
-func red_income() -> int:
-	return base_income
-
-
-func blue_income() -> int:
-	return base_income + (blue_factories * factory_income)
-
-
-func spend_gold(team: Team, amount: int) -> bool:
-	if team == Team.RED:
-		if red_gold >= amount:
-			red_gold -= amount
-			return true
-	else:
-		if blue_gold >= amount:
-			blue_gold -= amount
-			return true
-	return false
-
-
-func add_gold(team: Team, amount: int) -> void:
-	if team == Team.RED:
-		red_gold += amount
-	else:
-		blue_gold += amount
 
 
 func register_unit(unit: Node, team: Team) -> void:
@@ -218,11 +156,6 @@ func save_units_json() -> void:
 
 
 func reset_game() -> void:
-	red_gold = 0
-	blue_gold = 0
-	blue_factories = 0
 	red_units.clear()
 	blue_units.clear()
-	red_bases.clear()
 	blue_base = null
-	_income_timer = 0.0

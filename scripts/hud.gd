@@ -2,26 +2,17 @@ extends CanvasLayer
 
 signal red_purchase_requested(unit_type: int)
 signal blue_purchase_requested(unit_type: int)
-signal blue_factory_requested
 signal restart_requested
-signal red_gold_set_requested(amount: int)
-signal blue_gold_set_requested(amount: int)
 
 # Red panel (top-left)
-var red_gold_label: Label
-var red_income_label: Label
 var red_btn_alpha: Button
 var red_btn_bravo: Button
 var red_btn_charlie: Button
 
 # Blue panel (top-right)
-var blue_gold_label: Label
-var blue_income_label: Label
-var blue_factory_label: Label
 var blue_btn_alpha: Button
 var blue_btn_bravo: Button
 var blue_btn_charlie: Button
-var blue_btn_factory: Button
 
 # Shared
 var btn_speed: Button
@@ -32,12 +23,6 @@ var win_panel: Control
 var red_panel: Control
 var blue_panel: Control
 var bottom_panel: Control
-var editor_panel: Control
-
-# Editor spinboxes
-var red_gold_spinbox: SpinBox
-var blue_gold_spinbox: SpinBox
-var _updating_spinbox: bool = false
 
 # Debug menu
 var debug_panel: PanelContainer
@@ -60,17 +45,12 @@ func _ready() -> void:
 	_build_red_panel(root)
 	_build_blue_panel(root)
 	_build_bottom_panel(root)
-	_build_editor_panel(root)
 	_build_placement_hint(root)
 	_build_game_over_panel(root)
 	_build_win_panel(root)
-	_build_rps_legend(root)
 	_build_debug_panel(root)
 
-	GameData.red_gold_changed.connect(_on_red_gold_changed)
-	GameData.blue_gold_changed.connect(_on_blue_gold_changed)
 	GameData.phase_changed.connect(_on_phase_changed)
-	_refresh_labels()
 	_on_phase_changed(GameData.game_phase)
 
 
@@ -98,30 +78,21 @@ func _build_red_panel(root: Control) -> void:
 	title.add_theme_color_override("font_color", Color(1.0, 0.4, 0.4))
 	title_row.add_child(title)
 
-	red_gold_label = Label.new()
-	red_gold_label.add_theme_font_size_override("font_size", 15)
-	title_row.add_child(red_gold_label)
-
-	red_income_label = Label.new()
-	red_income_label.add_theme_font_size_override("font_size", 14)
-	red_income_label.add_theme_color_override("font_color", Color(0.9, 0.8, 0.3))
-	title_row.add_child(red_income_label)
-
 	# Unit buttons
 	var unit_row := HBoxContainer.new()
 	unit_row.add_theme_constant_override("separation", 4)
 	vbox.add_child(unit_row)
 
 	var rd := GameData.RED_UNITS
-	red_btn_alpha = _make_button("%s $%d" % [rd[GameData.UnitType.ALPHA]["name"], rd[GameData.UnitType.ALPHA]["cost"]], 130)
+	red_btn_alpha = _make_button(rd[GameData.UnitType.ALPHA]["name"], 100)
 	red_btn_alpha.pressed.connect(func(): red_purchase_requested.emit(GameData.UnitType.ALPHA))
 	unit_row.add_child(red_btn_alpha)
 
-	red_btn_bravo = _make_button("%s $%d" % [rd[GameData.UnitType.BRAVO]["name"], rd[GameData.UnitType.BRAVO]["cost"]], 130)
+	red_btn_bravo = _make_button(rd[GameData.UnitType.BRAVO]["name"], 100)
 	red_btn_bravo.pressed.connect(func(): red_purchase_requested.emit(GameData.UnitType.BRAVO))
 	unit_row.add_child(red_btn_bravo)
 
-	red_btn_charlie = _make_button("%s $%d" % [rd[GameData.UnitType.CHARLIE]["name"], rd[GameData.UnitType.CHARLIE]["cost"]], 130)
+	red_btn_charlie = _make_button(rd[GameData.UnitType.CHARLIE]["name"], 100)
 	red_btn_charlie.pressed.connect(func(): red_purchase_requested.emit(GameData.UnitType.CHARLIE))
 	unit_row.add_child(red_btn_charlie)
 
@@ -150,40 +121,23 @@ func _build_blue_panel(root: Control) -> void:
 	title.add_theme_color_override("font_color", Color(0.3, 0.5, 1.0))
 	title_row.add_child(title)
 
-	blue_gold_label = Label.new()
-	blue_gold_label.add_theme_font_size_override("font_size", 15)
-	title_row.add_child(blue_gold_label)
-
-	blue_income_label = Label.new()
-	blue_income_label.add_theme_font_size_override("font_size", 14)
-	blue_income_label.add_theme_color_override("font_color", Color(0.9, 0.8, 0.3))
-	title_row.add_child(blue_income_label)
-
-	blue_factory_label = Label.new()
-	blue_factory_label.add_theme_font_size_override("font_size", 14)
-	title_row.add_child(blue_factory_label)
-
 	# Unit buttons
 	var unit_row := HBoxContainer.new()
 	unit_row.add_theme_constant_override("separation", 4)
 	vbox.add_child(unit_row)
 
 	var bd := GameData.BLUE_UNITS
-	blue_btn_alpha = _make_button("%s $%d" % [bd[GameData.UnitType.ALPHA]["name"], bd[GameData.UnitType.ALPHA]["cost"]], 120)
+	blue_btn_alpha = _make_button(bd[GameData.UnitType.ALPHA]["name"], 100)
 	blue_btn_alpha.pressed.connect(func(): blue_purchase_requested.emit(GameData.UnitType.ALPHA))
 	unit_row.add_child(blue_btn_alpha)
 
-	blue_btn_bravo = _make_button("%s $%d" % [bd[GameData.UnitType.BRAVO]["name"], bd[GameData.UnitType.BRAVO]["cost"]], 120)
+	blue_btn_bravo = _make_button(bd[GameData.UnitType.BRAVO]["name"], 100)
 	blue_btn_bravo.pressed.connect(func(): blue_purchase_requested.emit(GameData.UnitType.BRAVO))
 	unit_row.add_child(blue_btn_bravo)
 
-	blue_btn_charlie = _make_button("%s $%d" % [bd[GameData.UnitType.CHARLIE]["name"], bd[GameData.UnitType.CHARLIE]["cost"]], 120)
+	blue_btn_charlie = _make_button(bd[GameData.UnitType.CHARLIE]["name"], 100)
 	blue_btn_charlie.pressed.connect(func(): blue_purchase_requested.emit(GameData.UnitType.CHARLIE))
 	unit_row.add_child(blue_btn_charlie)
-
-	blue_btn_factory = _make_button("Factory $10", 110)
-	blue_btn_factory.pressed.connect(func(): blue_factory_requested.emit())
-	unit_row.add_child(blue_btn_factory)
 
 
 func _build_bottom_panel(root: Control) -> void:
@@ -202,100 +156,6 @@ func _build_bottom_panel(root: Control) -> void:
 	btn_speed.pressed.connect(_cycle_speed)
 	hbox.add_child(btn_speed)
 
-
-func _build_editor_panel(root: Control) -> void:
-	editor_panel = Control.new()
-	editor_panel.mouse_filter = Control.MOUSE_FILTER_IGNORE
-	root.add_child(editor_panel)
-
-	var panel := PanelContainer.new()
-	panel.position = Vector2(5, 560)
-	editor_panel.add_child(panel)
-
-	var vbox := VBoxContainer.new()
-	vbox.add_theme_constant_override("separation", 6)
-	panel.add_child(vbox)
-
-	var title := Label.new()
-	title.text = "EDITOR"
-	title.add_theme_font_size_override("font_size", 13)
-	title.add_theme_color_override("font_color", Color(1, 0.8, 0.3))
-	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	vbox.add_child(title)
-
-	# Red gold editor
-	var red_row := HBoxContainer.new()
-	red_row.add_theme_constant_override("separation", 6)
-	vbox.add_child(red_row)
-
-	var red_lbl := Label.new()
-	red_lbl.text = "Oro Rojo:"
-	red_lbl.add_theme_font_size_override("font_size", 13)
-	red_row.add_child(red_lbl)
-
-	red_gold_spinbox = SpinBox.new()
-	red_gold_spinbox.min_value = 0
-	red_gold_spinbox.max_value = 9999
-	red_gold_spinbox.step = 1
-	red_gold_spinbox.value = GameData.red_gold
-	red_gold_spinbox.custom_minimum_size = Vector2(90, 28)
-	red_gold_spinbox.value_changed.connect(_on_red_spinbox_changed)
-	red_row.add_child(red_gold_spinbox)
-
-	var btn_r10 := Button.new()
-	btn_r10.text = "+10"
-	btn_r10.custom_minimum_size = Vector2(45, 28)
-	btn_r10.pressed.connect(func(): red_gold_set_requested.emit(int(red_gold_spinbox.value) + 10))
-	red_row.add_child(btn_r10)
-
-	var btn_r100 := Button.new()
-	btn_r100.text = "+100"
-	btn_r100.custom_minimum_size = Vector2(50, 28)
-	btn_r100.pressed.connect(func(): red_gold_set_requested.emit(int(red_gold_spinbox.value) + 100))
-	red_row.add_child(btn_r100)
-
-	# Blue gold editor
-	var blue_row := HBoxContainer.new()
-	blue_row.add_theme_constant_override("separation", 6)
-	vbox.add_child(blue_row)
-
-	var blue_lbl := Label.new()
-	blue_lbl.text = "Oro Azul:"
-	blue_lbl.add_theme_font_size_override("font_size", 13)
-	blue_row.add_child(blue_lbl)
-
-	blue_gold_spinbox = SpinBox.new()
-	blue_gold_spinbox.min_value = 0
-	blue_gold_spinbox.max_value = 9999
-	blue_gold_spinbox.step = 1
-	blue_gold_spinbox.value = GameData.blue_gold
-	blue_gold_spinbox.custom_minimum_size = Vector2(90, 28)
-	blue_gold_spinbox.value_changed.connect(_on_blue_spinbox_changed)
-	blue_row.add_child(blue_gold_spinbox)
-
-	var btn_b10 := Button.new()
-	btn_b10.text = "+10"
-	btn_b10.custom_minimum_size = Vector2(45, 28)
-	btn_b10.pressed.connect(func(): blue_gold_set_requested.emit(int(blue_gold_spinbox.value) + 10))
-	blue_row.add_child(btn_b10)
-
-	var btn_b100 := Button.new()
-	btn_b100.text = "+100"
-	btn_b100.custom_minimum_size = Vector2(50, 28)
-	btn_b100.pressed.connect(func(): blue_gold_set_requested.emit(int(blue_gold_spinbox.value) + 100))
-	blue_row.add_child(btn_b100)
-
-
-func _on_red_spinbox_changed(value: float) -> void:
-	if _updating_spinbox:
-		return
-	red_gold_set_requested.emit(int(value))
-
-
-func _on_blue_spinbox_changed(value: float) -> void:
-	if _updating_spinbox:
-		return
-	blue_gold_set_requested.emit(int(value))
 
 
 func _build_placement_hint(root: Control) -> void:
@@ -382,9 +242,6 @@ func _build_win_panel(root: Control) -> void:
 	vbox.add_child(btn)
 
 
-func _build_rps_legend(_root: Control) -> void:
-	pass
-
 
 func _make_button(text: String, min_w: float = 120) -> Button:
 	var btn := Button.new()
@@ -392,13 +249,6 @@ func _make_button(text: String, min_w: float = 120) -> Button:
 	btn.custom_minimum_size = Vector2(min_w, 30)
 	return btn
 
-
-func _on_red_gold_changed(_amount: int) -> void:
-	_refresh_labels()
-
-
-func _on_blue_gold_changed(_amount: int) -> void:
-	_refresh_labels()
 
 
 func _cycle_speed() -> void:
@@ -414,32 +264,9 @@ func _on_phase_changed(phase: GameData.GamePhase) -> void:
 	red_panel.visible = playing
 	blue_panel.visible = playing
 	bottom_panel.visible = playing
-	editor_panel.visible = playing
 	game_over_panel.visible = (phase == GameData.GamePhase.GAME_OVER)
 	win_panel.visible = (phase == GameData.GamePhase.WIN)
 	placement_label.visible = false
-	_refresh_labels()
-
-
-func _refresh_labels() -> void:
-	if red_gold_label:
-		red_gold_label.text = "Oro: %d" % GameData.red_gold
-	if red_income_label:
-		red_income_label.text = "(+%d/s)" % GameData.red_income()
-	if blue_gold_label:
-		blue_gold_label.text = "Oro: %d" % GameData.blue_gold
-	if blue_income_label:
-		blue_income_label.text = "(+%d/s)" % GameData.blue_income()
-	if blue_factory_label:
-		blue_factory_label.text = "Fab: %d" % GameData.blue_factories
-	if red_gold_spinbox:
-		_updating_spinbox = true
-		red_gold_spinbox.value = GameData.red_gold
-		_updating_spinbox = false
-	if blue_gold_spinbox:
-		_updating_spinbox = true
-		blue_gold_spinbox.value = GameData.blue_gold
-		_updating_spinbox = false
 	_update_buttons()
 
 
@@ -447,14 +274,12 @@ func _update_buttons() -> void:
 	if not red_btn_alpha:
 		return
 	var playing := GameData.game_phase == GameData.GamePhase.PLAYING
-	red_btn_alpha.disabled = not (playing and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.ALPHA))
-	red_btn_bravo.disabled = not (playing and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.BRAVO))
-	red_btn_charlie.disabled = not (playing and GameData.red_gold >= GameData.get_unit_cost(GameData.Team.RED, GameData.UnitType.CHARLIE))
-
-	blue_btn_alpha.disabled = not (playing and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.ALPHA))
-	blue_btn_bravo.disabled = not (playing and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.BRAVO))
-	blue_btn_charlie.disabled = not (playing and GameData.blue_gold >= GameData.get_unit_cost(GameData.Team.BLUE, GameData.UnitType.CHARLIE))
-	blue_btn_factory.disabled = not (playing and GameData.blue_gold >= GameData.FACTORY_COST)
+	red_btn_alpha.disabled = not playing
+	red_btn_bravo.disabled = not playing
+	red_btn_charlie.disabled = not playing
+	blue_btn_alpha.disabled = not playing
+	blue_btn_bravo.disabled = not playing
+	blue_btn_charlie.disabled = not playing
 
 
 func show_placement_hint(show: bool, team: int = GameData.Team.RED) -> void:
@@ -636,3 +461,5 @@ func _debug_apply_stats() -> void:
 		debug_selected_unit as GameData.UnitType
 	)
 	GameData.save_units_json()
+
+

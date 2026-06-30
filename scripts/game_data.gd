@@ -21,6 +21,34 @@ var blue_units: Array = []
 # Bases
 var blue_base: Node2D = null
 
+# ponytail: ability config, editable via F4 menu
+var ability_config := {
+	"bomb_key": KEY_Q,
+	"bomb_damage": 100.0,
+	"bomb_radius": 80.0,
+	"dash_key": KEY_W,
+	"dash_damage": 60.0,
+	"dash_distance": 150.0,
+	"dash_cooldown": 5.0,
+	"bomb_cooldown": 3.0,
+	"medic_cooldown": 8.0,
+	"medic_key": KEY_E,
+	"medic_heal_amount": 10.0,
+	"medic_heal_rate": 1.0,
+	"medic_heal_range": 150.0,
+	"medic_shield_amount": 200.0,
+	"medic_shield_duration": 6.0,
+}
+
+# ponytail: wave spawning config
+var wave_config := {
+	"interval": 15.0,
+	"auto": false,
+	"alpha_count": 3,
+	"bravo_count": 1,
+	"charlie_count": 0,
+}
+
 const TILE_SIZE: float = 100.0
 const BLUE_CELL_SIZE: float = 20.0
 
@@ -64,6 +92,16 @@ func _load_units_json() -> void:
 		return
 	RED_UNITS = _parse_team(parsed["red"])
 	BLUE_UNITS = _parse_team(parsed["blue"])
+	if parsed.has("abilities"):
+		var loaded: Dictionary = parsed["abilities"]
+		for key in loaded:
+			if ability_config.has(key):
+				ability_config[key] = loaded[key]
+	if parsed.has("waves"):
+		var loaded_w: Dictionary = parsed["waves"]
+		for key in loaded_w:
+			if wave_config.has(key):
+				wave_config[key] = loaded_w[key]
 
 
 func _load_fallback() -> void:
@@ -138,7 +176,7 @@ func unregister_unit(unit: Node, team: Team) -> void:
 const _TYPE_NAME_MAP := {UnitType.ALPHA: "ALPHA", UnitType.BRAVO: "BRAVO", UnitType.CHARLIE: "CHARLIE"}
 
 func save_units_json() -> void:
-	var out := {"red": {}, "blue": {}}
+	var out := {"red": {}, "blue": {}, "abilities": ability_config.duplicate(), "waves": wave_config.duplicate()}
 	for unit_type in _TYPE_NAME_MAP:
 		var key: String = _TYPE_NAME_MAP[unit_type]
 		for pair in [["red", RED_UNITS], ["blue", BLUE_UNITS]]:

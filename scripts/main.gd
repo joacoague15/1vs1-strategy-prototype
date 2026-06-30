@@ -24,6 +24,12 @@ var placement_mode: bool = false
 var placement_type: int = -1
 var placement_team: int = GameData.Team.RED
 var selected_unit: Node2D = null  # ponytail: blue RTS select+move
+var _bomb_effects: Array = []  # ponytail: [{pos, timer, radius}]
+var _ability_aiming: String = ""  # ponytail: "bomb", "dash", "shield" or ""
+var _ability_aim_unit: Node2D = null
+var _dash_effects: Array = []  # ponytail: [{start, end, timer}]
+var _wave_timer: float = 0.0
+var _wave_number: int = 0
 
 # Zone edge dragging (active when F1 panel visible)
 var zone_dragging: bool = false
@@ -47,6 +53,7 @@ func _ready() -> void:
 	hud.red_purchase_requested.connect(_on_red_purchase_requested)
 	hud.blue_purchase_requested.connect(_on_blue_purchase_requested)
 	hud.restart_requested.connect(_on_restart_requested)
+	hud.wave_requested.connect(_on_wave_requested)
 
 	_create_bases()
 	queue_redraw()
@@ -118,6 +125,12 @@ func _on_restart_requested() -> void:
 
 	placement_mode = false
 	_select_unit(null)
+	_bomb_effects.clear()
+	_dash_effects.clear()
+	_ability_aiming = ""
+	_ability_aim_unit = null
+	_wave_timer = 0.0
+	_wave_number = 0
 
 	# Recreate bases before setting phase (which triggers HUD update)
 	_create_bases()
@@ -133,10 +146,15 @@ func _unhandled_input(event: InputEvent) -> void:
 	if GameData.game_phase != GameData.GamePhase.PLAYING:
 		return
 
+	if _ability_aiming != "" and _handle_aim_input(event):
+		return
+
 	if placement_mode:
 		_handle_placement_input(event)
 		return
 
+	if _handle_ability_input(event):
+		return
 	_handle_select_input(event)
 
 
@@ -165,6 +183,131 @@ func _handle_placement_input(event: InputEvent) -> void:
 		placement_mode = false
 		hud.show_placement_hint(false)
 		get_viewport().set_input_as_handled()
+
+
+func _handle_ability_input(event: InputEvent) -> bool:
+	if not (event is InputEventKey and event.pressed):
+		return false
+	if not selected_unit or not is_instance_valid(selected_unit):
+		return false
+	if selected_unit.team != GameData.Team.BLUE:
+		return false
+	var cfg := GameData.ability_config
+	# Marine bomb (ALPHA)
+	if event.keycode == cfg["bomb_key"] and selected_unit.unit_type == GameData.UnitType.ALPHA:
+		if selected_unit._bomb_cd <= 0.0:
+			_ability_aiming = "bomb"
+			_ability_aim_unit = selected_unit
+			get_viewport().set_input_as_handled()
+			return true
+	# Hellbat dash (BRAVO)
+	if event.keycode == cfg["dash_key"] and selected_unit.unit_type == GameData.UnitType.BRAVO:
+		if selected_unit._dash_cd <= 0.0:
+			_ability_aiming = "dash"
+			_ability_aim_unit = selected_unit
+			get_viewport().set_input_as_handled()
+			return true
+	# Medic shield (CHARLIE)
+	if event.keycode == cfg["medic_key"] and selected_unit.unit_type == GameData.UnitType.CHARLIE:
+		if selected_unit._medic_cd <= 0.0:
+			_ability_aiming = "shield"
+			_ability_aim_unit = selected_unit
+			get_viewport().set_input_as_handled()
+			return true
+	# ponytail: attack-move (any blue unit)
+	if event.keycode == KEY_A:
+		_ability_aiming = "attack_move"
+		_ability_aim_unit = selected_unit
+		get_viewport().set_input_as_handled()
+		return true
+	return false
+
+
+func _handle_aim_input(event: InputEvent) -> bool:
+	if event is InputEventMouseButton and event.pressed:
+		if event.button_index == MOUSE_BUTTON_LEFT:
+			if is_instance_valid(_ability_aim_unit):
+				if not _execute_aimed_ability():
+					return true  # no valid target, stay in aiming
+			_ability_aiming = ""
+			_ability_aim_unit = null
+			get_viewport().set_input_as_handled()
+			return true
+		elif event.button_index == MOUSE_BUTTON_RIGHT:
+			_ability_aiming = ""
+			_ability_aim_unit = null
+			get_viewport().set_input_as_handled()
+			return true
+	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
+		_ability_aiming = ""
+		_ability_aim_unit = null
+		get_viewport().set_input_as_handled()
+		return true
+	return false
+
+
+func _execute_aimed_ability() -> bool:
+	var cfg := GameData.ability_config
+	var pos := get_global_mouse_position()
+	match _ability_aiming:
+		"bomb":
+			for enemy in GameData.red_units.duplicate():
+				if is_instance_valid(enemy) and enemy.global_position.distance_to(pos) <= cfg["bomb_radius"]:
+					enemy.take_damage(cfg["bomb_damage"])
+			_bomb_effects.append({"pos": pos, "timer": 0.4, "radius": cfg["bomb_radius"]})
+			_ability_aim_unit._bomb_cd = cfg["bomb_cooldown"]
+			return true
+		"dash":
+			_execute_dash(_ability_aim_unit, pos)
+			return true
+		"shield":
+			var best: Node2D = null
+			var best_dist: float = INF
+			for ally in GameData.blue_units:
+				if ally == _ability_aim_unit or not is_instance_valid(ally):
+					continue
+				var d := pos.distance_to(ally.global_position)
+				if d < best_dist:
+					best_dist = d
+					best = ally
+			if best:
+				best.apply_shield(cfg["medic_shield_amount"], cfg["medic_shield_duration"])
+				_ability_aim_unit._medic_cd = cfg["medic_cooldown"]
+				return true
+			return false  # no ally found, stay in aiming
+		"attack_move":
+			_ability_aim_unit.set_move_target(pos, true)
+			return true
+	return true
+
+
+const DASH_HIT_RADIUS := 15.0
+
+func _execute_dash(unit: Node2D, target_pos: Vector2) -> void:
+	var cfg := GameData.ability_config
+	var start_pos := unit.global_position
+	var dir := target_pos - start_pos
+	var dist := dir.length()
+	var max_dist: float = cfg["dash_distance"]
+	if dist > max_dist:
+		dir = dir.normalized() * max_dist
+	var end_pos := start_pos + dir
+
+	# Damage enemies along path
+	var dmg: float = cfg["dash_damage"]
+	for enemy in GameData.red_units.duplicate():
+		if is_instance_valid(enemy):
+			var closest := Geometry2D.get_closest_point_to_segment(enemy.global_position, start_pos, end_pos)
+			if enemy.global_position.distance_to(closest) <= DASH_HIT_RADIUS:
+				enemy.take_damage(dmg)
+
+	# Move unit
+	unit.position = end_pos
+	unit.moving = false
+	unit._dash_cd = cfg["dash_cooldown"]
+
+	# Trail effect
+	_dash_effects.append({"start": start_pos, "end": end_pos, "timer": 0.4})
 
 
 func _handle_select_input(event: InputEvent) -> void:
@@ -293,9 +436,72 @@ func _clamp_to_nearest_side_zone(pos: Vector2) -> Vector2:
 	return best_pos
 
 
-func _process(_delta: float) -> void:
-	if placement_mode or zone_dragging or (selected_unit and is_instance_valid(selected_unit) and selected_unit.moving):
+func _process(delta: float) -> void:
+	if placement_mode or zone_dragging or _ability_aiming != "" or (selected_unit and is_instance_valid(selected_unit) and selected_unit.moving):
 		queue_redraw()
+	if not _bomb_effects.is_empty():
+		for i in range(_bomb_effects.size() - 1, -1, -1):
+			_bomb_effects[i]["timer"] -= delta
+			if _bomb_effects[i]["timer"] <= 0.0:
+				_bomb_effects.remove_at(i)
+		queue_redraw()
+	if not _dash_effects.is_empty():
+		for i in range(_dash_effects.size() - 1, -1, -1):
+			_dash_effects[i]["timer"] -= delta
+			if _dash_effects[i]["timer"] <= 0.0:
+				_dash_effects.remove_at(i)
+		queue_redraw()
+	# ponytail: auto wave timer
+	if GameData.wave_config["auto"] and GameData.game_phase == GameData.GamePhase.PLAYING:
+		_wave_timer -= delta
+		if _wave_timer <= 0.0:
+			_spawn_wave()
+			_wave_timer = GameData.wave_config["interval"]
+
+
+func _spawn_wave() -> void:
+	var cfg := GameData.wave_config
+	# Build flat list of unit types to spawn
+	var units_to_spawn: Array = []
+	for i in int(cfg["alpha_count"]):
+		units_to_spawn.append(GameData.UnitType.ALPHA)
+	for i in int(cfg["bravo_count"]):
+		units_to_spawn.append(GameData.UnitType.BRAVO)
+	for i in int(cfg["charlie_count"]):
+		units_to_spawn.append(GameData.UnitType.CHARLIE)
+	if units_to_spawn.is_empty():
+		return
+	# Collect all available grid cells across red zones
+	var cs := GameData.BLUE_CELL_SIZE
+	var zone_lanes := [
+		[north_min, north_max, GameData.Lane.NORTH],
+		[south_min, south_max, GameData.Lane.SOUTH],
+		[east_min, east_max, GameData.Lane.EAST],
+		[west_min, west_max, GameData.Lane.WEST],
+	]
+	var cells: Array = []  # [{pos, lane}]
+	for zl in zone_lanes:
+		var zmin: Vector2 = zl[0]
+		var zmax: Vector2 = zl[1]
+		var lane: int = zl[2]
+		var cols := int((zmax.x - zmin.x) / cs)
+		var rows := int((zmax.y - zmin.y) / cs)
+		for col in cols:
+			for row in rows:
+				var cell_pos := Vector2(zmin.x + (col + 0.5) * cs, zmin.y + (row + 0.5) * cs)
+				if not _is_cell_occupied(cell_pos, GameData.Team.RED):
+					cells.append({"pos": cell_pos, "lane": lane})
+	cells.shuffle()
+	units_to_spawn.shuffle()
+	var count := mini(units_to_spawn.size(), cells.size())
+	for i in count:
+		_spawn_red_unit(units_to_spawn[i], cells[i]["pos"], cells[i]["lane"])
+	_wave_number += 1
+	hud.update_wave_label(_wave_number)
+
+
+func _on_wave_requested() -> void:
+	_spawn_wave()
 
 
 func _spawn_red_unit(unit_type: int, pos: Vector2, lane: int) -> void:
@@ -528,7 +734,52 @@ func _draw() -> void:
 
 	# ponytail: move target indicator
 	if selected_unit and is_instance_valid(selected_unit) and selected_unit.moving:
-		draw_circle(selected_unit.move_target, 3.0, Color(1, 1, 0, 0.5))
+		var mc := Color(1.0, 0.3, 0.0, 0.5) if selected_unit.attack_move else Color(1, 1, 0, 0.5)
+		draw_circle(selected_unit.move_target, 3.0, mc)
+
+	# Ability aiming indicators
+	if _ability_aiming != "" and is_instance_valid(_ability_aim_unit):
+		var mouse := get_local_mouse_position()
+		match _ability_aiming:
+			"bomb":
+				var radius: float = GameData.ability_config["bomb_radius"]
+				draw_circle(mouse, radius, Color(1.0, 0.5, 0.0, 0.15))
+				draw_arc(mouse, radius, 0, TAU, 24, Color(1.0, 0.3, 0.0, 0.5), 1.5)
+			"dash":
+				var ds := _ability_aim_unit.global_position
+				var dd := mouse - ds
+				var max_d: float = GameData.ability_config["dash_distance"]
+				if dd.length() > max_d:
+					dd = dd.normalized() * max_d
+				var de := ds + dd
+				draw_line(ds, de, Color(1.0, 0.5, 0.0, 0.6), 2.0)
+				draw_circle(de, 4.0, Color(1.0, 0.5, 0.0, 0.4))
+			"shield":
+				var best: Node2D = null
+				var best_dist: float = INF
+				for ally in GameData.blue_units:
+					if ally == _ability_aim_unit or not is_instance_valid(ally):
+						continue
+					var d := mouse.distance_to(ally.global_position)
+					if d < best_dist:
+						best_dist = d
+						best = ally
+				if best:
+					draw_arc(best.global_position, 12.0, 0, TAU, 16, Color(0.3, 1.0, 0.5, 0.7), 2.0)
+			"attack_move":
+				draw_line(_ability_aim_unit.global_position, mouse, Color(1.0, 0.3, 0.0, 0.3), 1.0)
+				draw_circle(mouse, 3.0, Color(1.0, 0.3, 0.0, 0.7))
+
+	# Dash trail effects
+	for effect in _dash_effects:
+		var da: float = effect["timer"] / 0.4
+		draw_line(effect["start"], effect["end"], Color(1.0, 0.5, 0.0, da * 0.6), 3.0)
+
+	# Bomb explosions
+	for effect in _bomb_effects:
+		var alpha: float = effect["timer"] / 0.4
+		draw_circle(effect["pos"], effect["radius"], Color(1.0, 0.5, 0.0, alpha * 0.3))
+		draw_arc(effect["pos"], effect["radius"], 0, TAU, 24, Color(1.0, 0.3, 0.0, alpha * 0.7), 2.0)
 
 	# Zone edit handles when F1 is visible
 	if hud.debug_panel.visible:

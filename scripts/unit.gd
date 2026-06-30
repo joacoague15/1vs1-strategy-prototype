@@ -16,10 +16,20 @@ var unit_cost: int = 50
 var armor_type: String = "heavy"
 var bonus_vs_light: float = 0.0
 var bonus_vs_heavy: float = 0.0
+var shield_hp: float = 0.0
+var shield_timer: float = 0.0
+var _bomb_cd: float = 0.0
+var _dash_cd: float = 0.0
+var _medic_cd: float = 0.0
+var _ability_ready_flash: float = 0.0
+var _heal_cooldown: float = 0.0
+var _heal_line_timer: float = 0.0
+var _heal_line_target_pos: Vector2 = Vector2.ZERO
 
 # ponytail: blue RTS select+move
 var move_target: Vector2 = Vector2.ZERO
 var moving: bool = false
+var attack_move: bool = false
 var selected: bool = false
 
 # --- Visual feedback state ---
@@ -115,11 +125,31 @@ func _process(delta: float) -> void:
 			position += dir * move_speed * delta
 	elif team == GameData.Team.BLUE:
 		if moving:
-			if global_position.distance_to(move_target) < 2.0:
+			var arrived := global_position.distance_to(move_target) < 2.0
+			var fighting := false
+			# ponytail: attack-move — fight/heal in range, then resume
+			if attack_move:
+				if unit_type == GameData.UnitType.CHARLIE:
+					var ally := _find_ally_target(true)
+					if ally:
+						fighting = true
+						_heal_tick(delta)
+				elif damage > 0.0:
+					target = _find_closest_enemy()
+					if target and global_position.distance_to(target.global_position) <= attack_range:
+						fighting = true
+						if fire_cooldown <= 0.0:
+							_shoot()
+							fire_cooldown = fire_rate
+			if arrived:
 				moving = false
-			else:
+				attack_move = false
+			elif not fighting:
 				var dir := (move_target - global_position).normalized()
 				position += dir * move_speed * delta
+		elif unit_type == GameData.UnitType.CHARLIE:
+			# ponytail: medic heals instead of attacking
+			_heal_tick(delta)
 		else:
 			# ponytail: "si queda quieto que ataque"
 			target = _find_closest_enemy()
@@ -141,6 +171,29 @@ func _process(delta: float) -> void:
 		needs_redraw = true
 	if _flame_timer > 0.0:
 		_flame_timer -= delta
+		needs_redraw = true
+	if shield_timer > 0.0:
+		shield_timer -= delta
+		if shield_timer <= 0.0:
+			shield_hp = 0.0
+		needs_redraw = true
+	if _bomb_cd > 0.0:
+		_bomb_cd -= delta
+		if _bomb_cd <= 0.0:
+			_ability_ready_flash = 0.3
+	if _dash_cd > 0.0:
+		_dash_cd -= delta
+		if _dash_cd <= 0.0:
+			_ability_ready_flash = 0.3
+	if _medic_cd > 0.0:
+		_medic_cd -= delta
+		if _medic_cd <= 0.0:
+			_ability_ready_flash = 0.3
+	if _ability_ready_flash > 0.0:
+		_ability_ready_flash -= delta
+		needs_redraw = true
+	if _heal_line_timer > 0.0:
+		_heal_line_timer -= delta
 		needs_redraw = true
 	if needs_redraw:
 		queue_redraw()
@@ -213,6 +266,10 @@ func _shoot() -> void:
 
 
 func take_damage(dmg: float) -> void:
+	if shield_hp > 0.0:
+		var absorbed := minf(shield_hp, dmg)
+		shield_hp -= absorbed
+		dmg -= absorbed
 	current_hp -= dmg
 	_damage_flash_timer = DAMAGE_FLASH_DURATION
 	queue_redraw()
@@ -220,9 +277,49 @@ func take_damage(dmg: float) -> void:
 		_die()
 
 
-func set_move_target(pos: Vector2) -> void:
+func set_move_target(pos: Vector2, a_move: bool = false) -> void:
 	move_target = pos
 	moving = true
+	attack_move = a_move
+
+
+func apply_shield(amount: float, duration: float) -> void:
+	shield_hp = amount
+	shield_timer = duration
+	queue_redraw()
+
+
+func _heal_tick(delta: float) -> void:
+	_heal_cooldown -= delta
+	if _heal_cooldown > 0.0:
+		return
+	var cfg := GameData.ability_config
+	var ally := _find_ally_target(true)
+	if not ally:
+		return
+	_heal_cooldown = cfg["medic_heal_rate"]
+	ally.current_hp = minf(ally.current_hp + cfg["medic_heal_amount"], ally.max_hp)
+	ally.queue_redraw()
+	_heal_line_timer = SHOT_LINE_DURATION
+	_heal_line_target_pos = ally.global_position
+
+
+func _find_ally_target(require_injured: bool) -> Node2D:
+	var best: Node2D = null
+	var best_ratio: float = INF
+	var heal_range: float = GameData.ability_config["medic_heal_range"]
+	for ally in GameData.blue_units:
+		if ally == self or not is_instance_valid(ally):
+			continue
+		if global_position.distance_to(ally.global_position) > heal_range:
+			continue
+		if require_injured and ally.current_hp >= ally.max_hp:
+			continue
+		var ratio: float = ally.current_hp / ally.max_hp
+		if ratio < best_ratio:
+			best_ratio = ratio
+			best = ally
+	return best
 
 
 func _die() -> void:
@@ -267,6 +364,18 @@ func _draw() -> void:
 	draw_rect(Rect2(-bar_w / 2.0, bar_y, bar_w, bar_h), Color(0.2, 0.0, 0.0))
 	draw_rect(Rect2(-bar_w / 2.0, bar_y, bar_w * hp_ratio, bar_h), Color(0.1, 0.9, 0.1))
 
+	# Shield visual
+	if shield_hp > 0.0:
+		draw_arc(Vector2.ZERO, half + 4.0, 0, TAU, 16, Color(0.3, 0.7, 1.0, 0.6), 1.5)
+		var shield_ratio := clampf(shield_hp / maxf(GameData.ability_config["medic_shield_amount"], 1.0), 0.0, 1.0)
+		draw_rect(Rect2(-bar_w / 2.0, bar_y - 3.0, bar_w * shield_ratio, bar_h), Color(0.3, 0.7, 1.0))
+
+	# --- Ability ready flash ---
+	if _ability_ready_flash > 0.0:
+		var fa := _ability_ready_flash / 0.3
+		var fr := half + 3.0 + (1.0 - fa) * 8.0
+		draw_arc(Vector2.ZERO, fr, 0, TAU, 16, Color(1.0, 1.0, 0.3, fa * 0.8), 2.0)
+
 	# --- Damage flash ---
 	if _damage_flash_timer > 0.0:
 		var flash_alpha: float = _damage_flash_timer / DAMAGE_FLASH_DURATION
@@ -278,6 +387,12 @@ func _draw() -> void:
 		var line_color := Color(1.0, 1.0, 0.5, line_alpha)
 		var local_target := to_local(_shot_target_pos)
 		draw_line(Vector2.ZERO, local_target, line_color, 1.0)
+
+	# --- Heal line (medic) ---
+	if _heal_line_timer > 0.0:
+		var heal_alpha: float = _heal_line_timer / SHOT_LINE_DURATION
+		var local_heal := to_local(_heal_line_target_pos)
+		draw_line(Vector2.ZERO, local_heal, Color(0.2, 1.0, 0.4, heal_alpha), 1.0)
 
 	# --- Melee slash ---
 	if _melee_slash_timer > 0.0:

@@ -1,20 +1,37 @@
 {
+	"abilities": {
+		"bomb_cooldown": 3.0,
+		"bomb_damage": 100.0,
+		"bomb_key": 81,
+		"bomb_radius": 80.0,
+		"dash_cooldown": 5.0,
+		"dash_damage": 60.0,
+		"dash_distance": 150.0,
+		"dash_key": 87,
+		"medic_cooldown": 8.0,
+		"medic_heal_amount": 10.0,
+		"medic_heal_range": 150.0,
+		"medic_heal_rate": 1.0,
+		"medic_key": 69,
+		"medic_shield_amount": 200.0,
+		"medic_shield_duration": 6.0
+	},
 	"blue": {
 		"ALPHA": {
 			"armor_type": "light",
-			"attack_range": 1.5,
-			"bonus_vs_heavy": 3.0,
+			"attack_range": 1.6,
+			"bonus_vs_heavy": 6.0,
 			"color": [
 				0.3,
 				0.5,
 				0.9
 			],
 			"cost": 50.0,
-			"damage": 6.0,
-			"fire_rate": 0.5,
-			"hp": 50.0,
+			"damage": 18.0,
+			"fire_rate": 0.75,
+			"hp": 301.0,
 			"letter": "M",
-			"move_speed": 52.5,
+			"move_speed": 80.0,
 			"name": "Marine"
 		},
 		"BRAVO": {
@@ -30,27 +47,26 @@
 			"damage": 14.0,
 			"fire_rate": 1.55,
 			"flame_arc": 120.0,
-			"hp": 251.0,
+			"hp": 451.0,
 			"letter": "F",
 			"move_speed": 55.0,
 			"name": "Firebat"
 		},
 		"CHARLIE": {
-			"armor_type": "heavy",
+			"armor_type": "light",
 			"attack_range": 1.5,
-			"bonus_vs_heavy": 8.0,
 			"color": [
-				0.5,
-				0.5,
-				0.6
+				0.2,
+				0.8,
+				0.4
 			],
 			"cost": 150.0,
-			"damage": 20.0,
-			"fire_rate": 0.95,
-			"hp": 201.0,
-			"letter": "T",
+			"damage": 0.0,
+			"fire_rate": 1.05,
+			"hp": 301.0,
+			"letter": "+",
 			"move_speed": 50.0,
-			"name": "Tank"
+			"name": "Medic"
 		}
 	},
 	"red": {
@@ -81,7 +97,7 @@
 				0.4
 			],
 			"cost": 100.0,
-			"damage": 12.0,
+			"damage": 8.0,
 			"fire_rate": 0.65,
 			"hp": 81.0,
 			"letter": "H",
@@ -98,12 +114,19 @@
 				0.2
 			],
 			"cost": 150.0,
-			"damage": 16.0,
+			"damage": 12.0,
 			"fire_rate": 1.55,
 			"hp": 141.0,
 			"letter": "R",
 			"move_speed": 60.0,
 			"name": "Roach"
 		}
+	},
+	"waves": {
+		"alpha_count": 6.0,
+		"auto": true,
+		"bravo_count": 0.0,
+		"charlie_count": 0,
+		"interval": 8.0
 	}
 }

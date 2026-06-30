@@ -46,6 +46,7 @@ const _TYPE_MAP := {"ALPHA": UnitType.ALPHA, "BRAVO": UnitType.BRAVO, "CHARLIE":
 
 func _ready() -> void:
 	_load_units_json()
+	_load_zones_json()
 
 
 func _load_units_json() -> void:
@@ -151,6 +152,35 @@ func save_units_json() -> void:
 			d["color"] = [snappedf(c.r, 0.01), snappedf(c.g, 0.01), snappedf(c.b, 0.01)]
 			out[team_key][key] = d
 	var file := FileAccess.open("res://data/units.json", FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(out, "\t"))
+
+
+func _load_zones_json() -> void:
+	var parsed = null
+	for attempt in 3:
+		var file := FileAccess.open("res://data/terrain.json", FileAccess.READ)
+		if file:
+			parsed = JSON.parse_string(file.get_as_text())
+			if parsed != null:
+				break
+	if parsed == null:
+		return  # ponytail: keep hardcoded defaults if file missing
+	for zone_name in zone_rects:
+		if parsed.has(zone_name):
+			var z: Dictionary = parsed[zone_name]
+			zone_rects[zone_name] = [Vector2(z["min"][0], z["min"][1]), Vector2(z["max"][0], z["max"][1])]
+
+
+func save_zones_json() -> void:
+	var out := {}
+	for zone_name in zone_rects:
+		var r: Array = zone_rects[zone_name]
+		out[zone_name] = {
+			"min": [snappedf(r[0].x, 1), snappedf(r[0].y, 1)],
+			"max": [snappedf(r[1].x, 1), snappedf(r[1].y, 1)],
+		}
+	var file := FileAccess.open("res://data/terrain.json", FileAccess.WRITE)
 	if file:
 		file.store_string(JSON.stringify(out, "\t"))
 

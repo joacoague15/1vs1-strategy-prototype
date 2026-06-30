@@ -361,6 +361,7 @@ func _handle_zone_edit_input(event: InputEvent) -> bool:
 		else:
 			if zone_dragging:
 				zone_dragging = false
+				GameData.save_zones_json()
 				get_viewport().set_input_as_handled()
 				return true
 

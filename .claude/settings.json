@@ -1,0 +1,6 @@
+{
+  "enabledPlugins": {
+    "godot-prompter@godot-prompter-marketplace": true,
+    "ponytail@ponytail": true
+  }
+}

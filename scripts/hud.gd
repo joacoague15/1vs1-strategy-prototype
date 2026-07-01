@@ -576,6 +576,10 @@ func _build_ability_panel(root: Control) -> void:
 	_add_ability_spinbox(vbox, "medic_shield_duration", "Escudo seg:", 1.0, 30.0, 0.5)
 	_add_ability_spinbox(vbox, "medic_cooldown", "Cooldown:", 0.5, 30.0, 0.5)
 
+	# --- General ---
+	_add_section_label(vbox, "General Blue", Color(0.3, 0.5, 1.0))
+	_add_ability_spinbox(vbox, "blue_regen", "Regen/seg:", 0.0, 50.0, 0.5)
+
 	var apply_btn := Button.new()
 	apply_btn.text = "Apply"
 	apply_btn.custom_minimum_size = Vector2(120, 30)

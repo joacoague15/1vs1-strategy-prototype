@@ -30,6 +30,9 @@ var _ability_aim_unit: Node2D = null
 var _dash_effects: Array = []  # [{start, end, timer}]
 var _wave_timer: float = 0.0
 var _wave_number: int = 0
+var _show_fps: bool = false
+var _pending_bomb_unit: Node2D = null
+var _pending_bomb_pos: Vector2 = Vector2.ZERO
 
 # Box selection (drag-select)
 var _box_selecting: bool = false
@@ -186,6 +189,7 @@ func _on_restart_requested() -> void:
 	_dash_effects.clear()
 	_ability_aiming = ""
 	_ability_aim_unit = null
+	_pending_bomb_unit = null
 	_wave_timer = 0.0
 	_wave_number = 0
 
@@ -196,6 +200,11 @@ func _on_restart_requested() -> void:
 
 
 func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and event.keycode == KEY_F3:
+		_show_fps = not _show_fps
+		queue_redraw()
+		get_viewport().set_input_as_handled()
+		return
 	# Zone edge dragging when F1 debug panel is visible (works in any phase)
 	if hud.debug_panel.visible and _handle_zone_edit_input(event):
 		return
@@ -295,14 +304,10 @@ func _handle_aim_input(event: InputEvent) -> bool:
 			get_viewport().set_input_as_handled()
 			return true
 		elif event.button_index == MOUSE_BUTTON_RIGHT:
-			# Right-click cancels aiming AND issues a move order
+			# ponytail: right-click in aiming = just cancel, no move order
 			_ability_aiming = ""
 			_ability_aim_unit = null
-			if not selected_units.is_empty():
-				var pos := get_global_mouse_position()
-				for u in selected_units:
-					if is_instance_valid(u):
-						u.set_move_target(pos)
+			_pending_bomb_unit = null
 			get_viewport().set_input_as_handled()
 			return true
 	elif event is InputEventKey and event.pressed and event.keycode == KEY_ESCAPE:
@@ -320,12 +325,16 @@ func _execute_aimed_ability() -> bool:
 		"bomb":
 			if not is_instance_valid(_ability_aim_unit):
 				return true
-			for enemy in GameData.red_units.duplicate():
-				if is_instance_valid(enemy) and enemy.global_position.distance_to(pos) <= cfg["bomb_radius"]:
-					enemy.take_damage(cfg["bomb_damage"])
-			_bomb_effects.append({"pos": pos, "timer": 0.4, "radius": cfg["bomb_radius"]})
-			_ability_aim_unit._bomb_cd = cfg["bomb_cooldown"]
-			return true
+			if _ability_aim_unit.global_position.distance_to(pos) <= _ability_aim_unit.attack_range:
+				_fire_bomb(_ability_aim_unit, pos)
+				_pending_bomb_unit = null
+				return true
+			else:
+				# ponytail: out of range — walk, keep aiming so player can re-target
+				_pending_bomb_unit = _ability_aim_unit
+				_pending_bomb_pos = pos
+				_ability_aim_unit.set_move_target(pos)
+				return false
 		"dash":
 			if not is_instance_valid(_ability_aim_unit):
 				return true
@@ -354,6 +363,15 @@ func _execute_aimed_ability() -> bool:
 					u.set_move_target(pos, true)
 			return true
 	return true
+
+
+func _fire_bomb(unit: Node2D, pos: Vector2) -> void:
+	var cfg := GameData.ability_config
+	for enemy in GameData.red_units.duplicate():
+		if is_instance_valid(enemy) and enemy.global_position.distance_to(pos) <= cfg["bomb_radius"]:
+			enemy.take_damage(cfg["bomb_damage"])
+	_bomb_effects.append({"pos": pos, "timer": 0.4, "radius": cfg["bomb_radius"]})
+	unit._bomb_cd = cfg["bomb_cooldown"]
 
 
 const DASH_HIT_RADIUS := 15.0
@@ -417,11 +435,19 @@ func _handle_select_input(event: InputEvent) -> void:
 		_box_end = get_global_mouse_position()
 		queue_redraw()
 	elif event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_RIGHT and event.pressed:
+		_pending_bomb_unit = null
 		if not selected_units.is_empty():
 			var pos := get_global_mouse_position()
-			for u in selected_units:
-				if is_instance_valid(u):
-					u.set_move_target(pos)
+			var enemy := _find_red_unit_at(pos)
+			if enemy:
+				for u in selected_units:
+					if is_instance_valid(u):
+						u.forced_target = enemy
+						u.moving = false
+			else:
+				for u in selected_units:
+					if is_instance_valid(u):
+						u.set_move_target(pos)
 			queue_redraw()
 
 
@@ -444,6 +470,18 @@ func _make_rect(a: Vector2, b: Vector2) -> Rect2:
 	var min_p := Vector2(minf(a.x, b.x), minf(a.y, b.y))
 	var max_p := Vector2(maxf(a.x, b.x), maxf(a.y, b.y))
 	return Rect2(min_p, max_p - min_p)
+
+
+func _find_red_unit_at(pos: Vector2) -> Node2D:
+	var closest: Node2D = null
+	var closest_dist: float = UNIT_CLICK_RADIUS
+	for u in GameData.red_units:
+		if is_instance_valid(u):
+			var dist := pos.distance_to(u.global_position)
+			if dist < closest_dist:
+				closest_dist = dist
+				closest = u
+	return closest
 
 
 func _find_blue_unit_at(pos: Vector2) -> Node2D:
@@ -556,12 +594,27 @@ func _process(delta: float) -> void:
 	# for separation/collision avoidance.
 	GameData.rebuild_spatial_grid()
 
+	# Pending bomb: marine walks into range then throws
+	if _pending_bomb_unit != null:
+		var _bomb_done := false
+		if not is_instance_valid(_pending_bomb_unit) or not _pending_bomb_unit.moving:
+			_bomb_done = true
+		elif _pending_bomb_unit.global_position.distance_to(_pending_bomb_pos) <= _pending_bomb_unit.attack_range:
+			_fire_bomb(_pending_bomb_unit, _pending_bomb_pos)
+			_pending_bomb_unit.moving = false
+			_bomb_done = true
+		if _bomb_done:
+			_pending_bomb_unit = null
+			if _ability_aiming == "bomb":
+				_ability_aiming = ""
+				_ability_aim_unit = null
+
 	var any_moving := false
 	for u in selected_units:
 		if is_instance_valid(u) and u.moving:
 			any_moving = true
 			break
-	if placement_mode or zone_dragging or _ability_aiming != "" or _box_selecting or any_moving:
+	if _show_fps or placement_mode or zone_dragging or _ability_aiming != "" or _box_selecting or any_moving:
 		queue_redraw()
 	if not _bomb_effects.is_empty():
 		for i in range(_bomb_effects.size() - 1, -1, -1):
@@ -913,9 +966,16 @@ func _draw() -> void:
 		match _ability_aiming:
 			"bomb":
 				if is_instance_valid(_ability_aim_unit):
+					# Range arc: max throw distance from marine
+					var throw_range: float = _ability_aim_unit.attack_range
+					draw_arc(_ability_aim_unit.global_position, throw_range, 0, TAU, 32, Color(1.0, 0.6, 0.2, 0.3), 1.0)
+					# Explosion radius at cursor
 					var radius: float = GameData.ability_config["bomb_radius"]
-					draw_circle(mouse, radius, Color(1.0, 0.5, 0.0, 0.15))
-					draw_arc(mouse, radius, 0, TAU, 24, Color(1.0, 0.3, 0.0, 0.5), 1.5)
+					var out_of_range := _ability_aim_unit.global_position.distance_to(mouse) > throw_range
+					var circle_color := Color(1.0, 0.3, 0.0, 0.1) if out_of_range else Color(1.0, 0.5, 0.0, 0.15)
+					var arc_color := Color(1.0, 0.3, 0.0, 0.25) if out_of_range else Color(1.0, 0.3, 0.0, 0.5)
+					draw_circle(mouse, radius, circle_color)
+					draw_arc(mouse, radius, 0, TAU, 24, arc_color, 1.5)
 			"dash":
 				if is_instance_valid(_ability_aim_unit):
 					var ds := _ability_aim_unit.global_position
@@ -959,6 +1019,12 @@ func _draw() -> void:
 	# Zone edit handles when F1 is visible
 	if hud.debug_panel.visible:
 		_draw_zone_handles()
+
+	if _show_fps:
+		var fps_text := "FPS: %d" % Engine.get_frames_per_second()
+		var f := ThemeDB.fallback_font
+		var sz := f.get_string_size(fps_text, HORIZONTAL_ALIGNMENT_RIGHT, -1, 14)
+		draw_string(f, Vector2(1272.0 - sz.x, 18.0), fps_text, HORIZONTAL_ALIGNMENT_RIGHT, -1, 14, Color.WHITE)
 
 
 func _draw_zone_label(font: Font, zmin: Vector2, zmax: Vector2, text: String, color: Color) -> void:

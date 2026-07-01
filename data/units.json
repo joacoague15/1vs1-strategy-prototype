@@ -1,12 +1,13 @@
 {
 	"abilities": {
-		"bomb_cooldown": 3.0,
+		"blue_regen": 1.0,
+		"bomb_cooldown": 4.0,
 		"bomb_damage": 100.0,
 		"bomb_key": 81.0,
-		"bomb_radius": 80.0,
+		"bomb_radius": 30.0,
 		"dash_cooldown": 5.0,
 		"dash_damage": 60.0,
-		"dash_distance": 150.0,
+		"dash_distance": 80.0,
 		"dash_key": 87.0,
 		"medic_cooldown": 8.0,
 		"medic_heal_amount": 10.0,
@@ -19,7 +20,7 @@
 	"blue": {
 		"ALPHA": {
 			"armor_type": "light",
-			"attack_range": 1.6,
+			"attack_range": 1.5,
 			"bonus_vs_heavy": 6.0,
 			"color": [
 				0.3,
@@ -28,15 +29,15 @@
 			],
 			"cost": 50.0,
 			"damage": 18.0,
-			"fire_rate": 0.75,
+			"fire_rate": 0.45,
 			"hp": 301.0,
 			"letter": "M",
-			"move_speed": 80.0,
+			"move_speed": 95.0,
 			"name": "Marine"
 		},
 		"BRAVO": {
 			"armor_type": "heavy",
-			"attack_range": 1.2,
+			"attack_range": 0.9,
 			"bonus_vs_light": 8.0,
 			"color": [
 				0.9,
@@ -44,17 +45,17 @@
 				0.2
 			],
 			"cost": 100.0,
-			"damage": 14.0,
-			"fire_rate": 1.55,
-			"flame_arc": 120.0,
+			"damage": 22.0,
+			"fire_rate": 1.35,
+			"flame_arc": 160.0,
 			"hp": 451.0,
 			"letter": "F",
-			"move_speed": 55.0,
+			"move_speed": 85.0,
 			"name": "Firebat"
 		},
 		"CHARLIE": {
 			"armor_type": "light",
-			"attack_range": 1.5,
+			"attack_range": 0.5,
 			"color": [
 				0.2,
 				0.8,
@@ -62,10 +63,10 @@
 			],
 			"cost": 150.0,
 			"damage": 0.0,
-			"fire_rate": 1.05,
+			"fire_rate": 0.45,
 			"hp": 301.0,
 			"letter": "+",
-			"move_speed": 50.0,
+			"move_speed": 80.0,
 			"name": "Medic"
 		}
 	},
@@ -123,9 +124,9 @@
 		}
 	},
 	"waves": {
-		"alpha_count": 2.0,
+		"alpha_count": 0.0,
 		"auto": true,
-		"bravo_count": 0.0,
+		"bravo_count": 2.0,
 		"charlie_count": 0.0,
 		"interval": 8.0
 	}

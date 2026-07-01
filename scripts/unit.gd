@@ -41,6 +41,7 @@ var move_target: Vector2 = Vector2.ZERO
 var moving: bool = false
 var attack_move: bool = false
 var selected: bool = false
+var forced_target: Node2D = null
 
 # --- Visual feedback state ---
 var _shot_timer: float = 0.0
@@ -120,6 +121,15 @@ func _process(delta: float) -> void:
 
 	fire_cooldown -= delta
 
+	# ponytail: passive regen for blue units
+	if team == GameData.Team.BLUE and current_hp < max_hp:
+		current_hp = minf(current_hp + GameData.ability_config["blue_regen"] * delta, max_hp)
+		queue_redraw()
+
+	# Clear dead forced target
+	if forced_target != null and not is_instance_valid(forced_target):
+		forced_target = null
+
 	if team == GameData.Team.RED:
 		# ponytail: red always attacks from spawn, no idle/launch flow
 		target = _find_closest_enemy()
@@ -144,6 +154,7 @@ func _process(delta: float) -> void:
 				_move_with_separation(Vector2.ZERO, delta)
 			else:
 				var fighting := false
+				var chase_dir := Vector2.ZERO
 				# Attack-move: stop to fight, resume when target dies or leaves range
 				if attack_move:
 					if unit_type == GameData.UnitType.CHARLIE:
@@ -153,19 +164,42 @@ func _process(delta: float) -> void:
 							_heal_tick(delta)
 					elif damage > 0.0:
 						target = _find_closest_enemy()
-						if target and global_position.distance_to(target.global_position) <= attack_range:
-							fighting = true
-							if fire_cooldown <= 0.0:
-								_shoot()
-								fire_cooldown = fire_rate
+						if target:
+							var dist_to_target := global_position.distance_to(target.global_position)
+							if dist_to_target <= attack_range:
+								fighting = true
+								if fire_cooldown <= 0.0:
+									_shoot()
+									fire_cooldown = fire_rate
+							elif flame_arc > 0.0 and dist_to_target <= GameData.TILE_SIZE * 6.0:
+								# ponytail: hellbat aggro — chase enemies on the path, max 6 tiles
+								chase_dir = (target.global_position - global_position).normalized()
 				if fighting:
 					_move_with_separation(Vector2.ZERO, delta)
+				elif chase_dir != Vector2.ZERO:
+					_move_with_separation(chase_dir, delta)
 				else:
 					var dir := (move_target - global_position).normalized()
 					_move_with_separation(dir, delta)
 		elif unit_type == GameData.UnitType.CHARLIE:
 			_heal_tick(delta)
-			_move_with_separation(Vector2.ZERO, delta)
+			# ponytail: idle medic walks toward injured allies
+			var chase := _find_ally_target(true, true)
+			if chase and global_position.distance_to(chase.global_position) > attack_range:
+				_move_with_separation((chase.global_position - global_position).normalized(), delta)
+			else:
+				_move_with_separation(Vector2.ZERO, delta)
+		elif forced_target != null and is_instance_valid(forced_target):
+			# Right-click focus: chase and attack forced target
+			target = forced_target
+			var dist_ft := global_position.distance_to(target.global_position)
+			if dist_ft <= attack_range:
+				if fire_cooldown <= 0.0:
+					_shoot()
+					fire_cooldown = fire_rate
+				_move_with_separation(Vector2.ZERO, delta)
+			else:
+				_move_with_separation((target.global_position - global_position).normalized(), delta)
 		else:
 			# Idle: auto-attack enemies in range
 			target = _find_closest_enemy()
@@ -225,6 +259,9 @@ func _separation_velocity() -> Vector2:
 	var query_r := radius + radius
 	for other in GameData.get_nearby_units(global_position, query_r):
 		if other == self or not is_instance_valid(other):
+			continue
+		# ponytail: red can't push blue — blues hold ground, reds go around
+		if team == GameData.Team.BLUE and other.team == GameData.Team.RED:
 			continue
 		var offset: Vector2 = global_position - other.global_position
 		var d: float = offset.length()
@@ -403,6 +440,7 @@ func set_move_target(pos: Vector2, a_move: bool = false) -> void:
 	move_target = pos
 	moving = true
 	attack_move = a_move
+	forced_target = null
 
 
 func apply_shield(amount: float, duration: float) -> void:
@@ -426,14 +464,14 @@ func _heal_tick(delta: float) -> void:
 	_heal_line_target_pos = ally.global_position
 
 
-func _find_ally_target(require_injured: bool) -> Node2D:
+func _find_ally_target(require_injured: bool, any_range: bool = false) -> Node2D:
 	var best: Node2D = null
 	var best_ratio: float = INF
-	var heal_range: float = GameData.ability_config["medic_heal_range"]
+	var heal_range: float = attack_range
 	for ally in GameData.blue_units:
 		if ally == self or not is_instance_valid(ally):
 			continue
-		if global_position.distance_to(ally.global_position) > heal_range:
+		if not any_range and global_position.distance_to(ally.global_position) > heal_range:
 			continue
 		if require_injured and ally.current_hp >= ally.max_hp:
 			continue

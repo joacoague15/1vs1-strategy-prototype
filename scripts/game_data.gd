@@ -63,6 +63,7 @@ var ability_config := {
 	"medic_heal_range": 150.0,
 	"medic_shield_amount": 200.0,
 	"medic_shield_duration": 6.0,
+	"blue_regen": 1.0,
 }
 
 # ponytail: wave spawning config

@@ -437,6 +437,11 @@ func _clamp_to_nearest_side_zone(pos: Vector2) -> Vector2:
 
 
 func _process(delta: float) -> void:
+	# ponytail: rebuild the spatial grid once per frame BEFORE units run their
+	# own _process (main is the tree root, so it processes first). Units query it
+	# for separation/collision avoidance.
+	GameData.rebuild_spatial_grid()
+
 	if placement_mode or zone_dragging or _ability_aiming != "" or (selected_unit and is_instance_valid(selected_unit) and selected_unit.moving):
 		queue_redraw()
 	if not _bomb_effects.is_empty():

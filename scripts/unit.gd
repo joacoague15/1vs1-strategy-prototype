@@ -26,6 +26,16 @@ var _heal_cooldown: float = 0.0
 var _heal_line_timer: float = 0.0
 var _heal_line_target_pos: Vector2 = Vector2.ZERO
 
+# ponytail: collision avoidance — hitbox a bit bigger than the body so units
+# keep a small gap instead of sitting on top of each other. Body half = 8px;
+# two units stay ~one cell (20px) apart at rest.
+var radius: float = GameData.BLUE_CELL_SIZE * 0.5
+# How hard separation pushes relative to move_speed. >1 lets it overcome seek
+# enough to unstick overlaps, but stays soft so the horde compresses and flows.
+const SEPARATION_WEIGHT: float = 1.4
+# Cap the summed push so a unit surrounded asymmetrically can't fling away.
+const MAX_SEPARATION: float = 2.0
+
 # ponytail: blue RTS select+move
 var move_target: Vector2 = Vector2.ZERO
 var moving: bool = false
@@ -114,15 +124,17 @@ func _process(delta: float) -> void:
 		# ponytail: red always attacks from spawn, no idle/launch flow
 		target = _find_closest_enemy()
 		if target and global_position.distance_to(target.global_position) <= attack_range:
+			# In range: stop pushing forward, but still separate (spread the line).
 			if fire_cooldown <= 0.0:
 				_shoot()
 				fire_cooldown = fire_rate
+			_move_with_separation(Vector2.ZERO, delta)
 		elif target:
 			var dir := (target.global_position - global_position).normalized()
-			position += dir * move_speed * delta
+			_move_with_separation(dir, delta)
 		else:
 			var dir := (GameData.get_zone_center() - global_position).normalized()
-			position += dir * move_speed * delta
+			_move_with_separation(dir, delta)
 	elif team == GameData.Team.BLUE:
 		if moving:
 			var arrived := global_position.distance_to(move_target) < 2.0
@@ -144,12 +156,17 @@ func _process(delta: float) -> void:
 			if arrived:
 				moving = false
 				attack_move = false
+				_move_with_separation(Vector2.ZERO, delta)
 			elif not fighting:
 				var dir := (move_target - global_position).normalized()
-				position += dir * move_speed * delta
+				_move_with_separation(dir, delta)
+			else:
+				# Fighting/healing in place — still separate so allies don't stack.
+				_move_with_separation(Vector2.ZERO, delta)
 		elif unit_type == GameData.UnitType.CHARLIE:
 			# ponytail: medic heals instead of attacking
 			_heal_tick(delta)
+			_move_with_separation(Vector2.ZERO, delta)
 		else:
 			# ponytail: "si queda quieto que ataque"
 			target = _find_closest_enemy()
@@ -157,6 +174,7 @@ func _process(delta: float) -> void:
 				if fire_cooldown <= 0.0:
 					_shoot()
 					fire_cooldown = fire_rate
+			_move_with_separation(Vector2.ZERO, delta)
 
 	# --- Visual effect timers ---
 	var needs_redraw := false
@@ -197,6 +215,41 @@ func _process(delta: float) -> void:
 		needs_redraw = true
 	if needs_redraw:
 		queue_redraw()
+
+
+# ponytail: separation steering. Sums a push away from every near neighbor
+# (own + enemy team), weighted by how deep the overlap is. Only looks at units
+# in nearby grid cells, so cost scales with local density, not total count.
+func _separation_velocity() -> Vector2:
+	var push := Vector2.ZERO
+	# Query radius = our reach to the farthest possible touching neighbor.
+	var query_r := radius + radius
+	for other in GameData.get_nearby_units(global_position, query_r):
+		if other == self or not is_instance_valid(other):
+			continue
+		var offset: Vector2 = global_position - other.global_position
+		var d: float = offset.length()
+		var min_dist: float = radius + other.radius
+		if d >= min_dist:
+			continue
+		if d > 0.01:
+			# Closer = stronger push (linear falloff to 0 at min_dist).
+			push += (offset / d) * (1.0 - d / min_dist)
+		else:
+			# Exactly stacked: scatter in a stable per-unit direction so they
+			# don't freeze into an immobile ball.
+			var ang := float(get_instance_id() % 628) / 100.0
+			push += Vector2(cos(ang), sin(ang))
+	return push.limit_length(MAX_SEPARATION)
+
+
+# Combines a desired seek direction (normalized, or ZERO when holding position)
+# with separation, then advances. Units always separate, even while attacking,
+# so the front line spreads out instead of bunching on one point.
+func _move_with_separation(seek_dir: Vector2, delta: float) -> void:
+	var vel := seek_dir * move_speed + _separation_velocity() * move_speed * SEPARATION_WEIGHT
+	if vel != Vector2.ZERO:
+		position += vel * delta
 
 
 func _find_closest_enemy() -> Node2D:

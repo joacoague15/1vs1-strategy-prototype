@@ -157,6 +157,51 @@ func notify_stats_changed(team_val: Team, unit_type_val: UnitType) -> void:
 			unit.reload_stats()
 
 
+# --- Spatial hash grid (collision avoidance / separation) ---
+# ponytail: rebuilt once per frame by main.gd, queried by each unit so a unit
+# only looks at near neighbors instead of every other unit (O(N) vs O(N^2)).
+const SPATIAL_CELL_SIZE: float = 24.0
+var _spatial_grid: Dictionary = {}
+
+
+func rebuild_spatial_grid() -> void:
+	_spatial_grid.clear()
+	for u in red_units:
+		if is_instance_valid(u):
+			_grid_insert(u)
+	for u in blue_units:
+		if is_instance_valid(u):
+			_grid_insert(u)
+
+
+func _grid_insert(u: Node2D) -> void:
+	var key := _cell_of(u.global_position)
+	if not _spatial_grid.has(key):
+		_spatial_grid[key] = []
+	_spatial_grid[key].append(u)
+
+
+func _cell_of(pos: Vector2) -> Vector2i:
+	return Vector2i(
+		int(floor(pos.x / SPATIAL_CELL_SIZE)),
+		int(floor(pos.y / SPATIAL_CELL_SIZE))
+	)
+
+
+# Returns units in cells overlapping the query box (centered on pos, +/- query_radius).
+# May include a few units slightly outside query_radius — caller filters by distance.
+func get_nearby_units(pos: Vector2, query_radius: float) -> Array:
+	var result: Array = []
+	var min_c := _cell_of(pos - Vector2(query_radius, query_radius))
+	var max_c := _cell_of(pos + Vector2(query_radius, query_radius))
+	for cx in range(min_c.x, max_c.x + 1):
+		for cy in range(min_c.y, max_c.y + 1):
+			var key := Vector2i(cx, cy)
+			if _spatial_grid.has(key):
+				result.append_array(_spatial_grid[key])
+	return result
+
+
 func register_unit(unit: Node, team: Team) -> void:
 	if team == Team.RED:
 		if unit not in red_units:
@@ -226,4 +271,5 @@ func save_zones_json() -> void:
 func reset_game() -> void:
 	red_units.clear()
 	blue_units.clear()
+	_spatial_grid.clear()
 	blue_base = null

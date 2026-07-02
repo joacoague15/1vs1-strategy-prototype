@@ -17,7 +17,7 @@ var west_max: Vector2
 var east_min: Vector2
 var east_max: Vector2
 
-const UNIT_CLICK_RADIUS := 9.0
+const UNIT_CLICK_RADIUS := 10.4  # ponytail: 30% over body radius (8 * 1.3)
 const UNIT_MIN_DISTANCE := 16.0
 
 var placement_mode: bool = false
@@ -33,6 +33,14 @@ var _wave_number: int = 0
 var _show_fps: bool = false
 var _pending_bomb_unit: Node2D = null
 var _pending_bomb_pos: Vector2 = Vector2.ZERO
+var _second_bombs: Array = []  # [{pos, timer}] mejora circuitos
+var _napalm_beams: Array = []  # [{start, end, timer, tick}] mejora napalm del dash
+
+const AREA_COLORS := {
+	"acid": Color(0.4, 0.9, 0.2),
+	"stim": Color(1.0, 0.9, 0.2),
+	"slow": Color(0.5, 0.8, 1.0),
+}
 
 # Box selection (drag-select)
 var _box_selecting: bool = false
@@ -187,6 +195,8 @@ func _on_restart_requested() -> void:
 	_box_selecting = false
 	_bomb_effects.clear()
 	_dash_effects.clear()
+	_second_bombs.clear()
+	_napalm_beams.clear()
 	_ability_aiming = ""
 	_ability_aim_unit = null
 	_pending_bomb_unit = null
@@ -365,13 +375,35 @@ func _execute_aimed_ability() -> bool:
 	return true
 
 
-func _fire_bomb(unit: Node2D, pos: Vector2) -> void:
+func _explode_bomb(pos: Vector2, dmg: float) -> void:
 	var cfg := GameData.ability_config
 	for enemy in GameData.red_units.duplicate():
 		if is_instance_valid(enemy) and enemy.global_position.distance_to(pos) <= cfg["bomb_radius"]:
-			enemy.take_damage(cfg["bomb_damage"])
+			enemy.take_damage(dmg)
 	_bomb_effects.append({"pos": pos, "timer": 0.4, "radius": cfg["bomb_radius"]})
-	unit._bomb_cd = cfg["bomb_cooldown"]
+
+
+func _fire_bomb(unit: Node2D, pos: Vector2) -> void:
+	var cfg := GameData.ability_config
+	_explode_bomb(pos, cfg["bomb_damage"])
+	# Mejoras combinables: cada una agrega su efecto de forma independiente
+	if cfg["bomb_upgrade_circuit"]:
+		_second_bombs.append({"pos": pos, "timer": cfg["circuit_delay"]})
+	if cfg["bomb_upgrade_acid"]:
+		GameData.bomb_areas.append({"type": "acid", "pos": pos, "radius": cfg["bomb_radius"],
+			"timer": cfg["acid_duration"], "tick": cfg["acid_interval"]})
+	if cfg["bomb_upgrade_stim"]:
+		GameData.bomb_areas.append({"type": "stim", "pos": pos, "radius": cfg["bomb_radius"],
+			"timer": cfg["stim_duration"], "tick": 0.0})
+	if cfg["bomb_upgrade_slow"]:
+		GameData.bomb_areas.append({"type": "slow", "pos": pos, "radius": cfg["bomb_radius"],
+			"timer": cfg["slow_duration"], "tick": 0.0})
+	# Mejora cantidad: el cooldown recien arranca al gastar todas las cargas
+	var max_charges := int(cfg["bomb_charges"]) if cfg["bomb_upgrade_count"] else 1
+	unit._bomb_shots += 1
+	if unit._bomb_shots >= max_charges:
+		unit._bomb_shots = 0
+		unit._bomb_cd = cfg["bomb_cooldown"]
 
 
 const DASH_HIT_RADIUS := 15.0
@@ -393,6 +425,23 @@ func _execute_dash(unit: Node2D, target_pos: Vector2) -> void:
 			var closest := Geometry2D.get_closest_point_to_segment(enemy.global_position, start_pos, end_pos)
 			if enemy.global_position.distance_to(closest) <= DASH_HIT_RADIUS:
 				enemy.take_damage(dmg)
+
+	# Mejoras combinables del dash
+	if cfg["dash_upgrade_shield"]:
+		for ally in GameData.blue_units:
+			if ally != unit and is_instance_valid(ally):
+				var cp := Geometry2D.get_closest_point_to_segment(ally.global_position, start_pos, end_pos)
+				if ally.global_position.distance_to(cp) <= DASH_HIT_RADIUS:
+					ally.apply_shield(cfg["dash_shield_amount"], cfg["dash_shield_duration"])
+	if cfg["dash_upgrade_stun"]:
+		for enemy in GameData.red_units:
+			if is_instance_valid(enemy) and enemy.global_position.distance_to(end_pos) <= cfg["stun_radius"]:
+				enemy._stun_timer = cfg["stun_duration"]
+				enemy.queue_redraw()
+		_bomb_effects.append({"pos": end_pos, "timer": 0.4, "radius": cfg["stun_radius"]})
+	if cfg["dash_upgrade_napalm"]:
+		_napalm_beams.append({"start": start_pos, "end": end_pos,
+			"timer": cfg["napalm_duration"], "tick": 1.0})
 
 	# Move unit
 	unit.position = end_pos
@@ -418,10 +467,10 @@ func _handle_select_input(event: InputEvent) -> void:
 				_box_selecting = false
 				var drag_dist := _box_start.distance_to(_box_end)
 				if drag_dist < BOX_SELECT_THRESHOLD:
-					# Small drag = single click select
+					# Single click: select unit, ignore terrain clicks
 					var unit := _find_blue_unit_at(_box_start)
-					_deselect_all()
 					if unit:
+						_deselect_all()
 						_select_add(unit)
 				else:
 					# Box select: select all blue units inside the rect
@@ -627,6 +676,50 @@ func _process(delta: float) -> void:
 			_dash_effects[i]["timer"] -= delta
 			if _dash_effects[i]["timer"] <= 0.0:
 				_dash_effects.remove_at(i)
+		queue_redraw()
+	# Segunda explosion (mejora circuitos)
+	if not _second_bombs.is_empty():
+		var cfg := GameData.ability_config
+		for i in range(_second_bombs.size() - 1, -1, -1):
+			_second_bombs[i]["timer"] -= delta
+			if _second_bombs[i]["timer"] <= 0.0:
+				_explode_bomb(_second_bombs[i]["pos"], cfg["bomb_damage"] * cfg["circuit_fraction"])
+				_second_bombs.remove_at(i)
+	# Napalm del dash: tick de daño por armadura + expiracion
+	if not _napalm_beams.is_empty():
+		var cfg_n := GameData.ability_config
+		for i in range(_napalm_beams.size() - 1, -1, -1):
+			var beam: Dictionary = _napalm_beams[i]
+			beam["timer"] -= delta
+			beam["tick"] -= delta
+			if beam["tick"] <= 0.0:
+				beam["tick"] = 1.0
+				for enemy in GameData.red_units.duplicate():
+					if not is_instance_valid(enemy):
+						continue
+					var cp: Vector2 = Geometry2D.get_closest_point_to_segment(
+						enemy.global_position, beam["start"], beam["end"])
+					if enemy.global_position.distance_to(cp) <= cfg_n["napalm_width"]:
+						enemy.take_damage(cfg_n["napalm_dps_light"] if enemy.armor_type == "light"
+							else cfg_n["napalm_dps_heavy"])
+			if beam["timer"] <= 0.0:
+				_napalm_beams.remove_at(i)
+		queue_redraw()
+	# Areas de bomba: expiracion + tick de acido
+	if not GameData.bomb_areas.is_empty():
+		var cfg_a := GameData.ability_config
+		for i in range(GameData.bomb_areas.size() - 1, -1, -1):
+			var area: Dictionary = GameData.bomb_areas[i]
+			area["timer"] -= delta
+			if area["type"] == "acid":
+				area["tick"] -= delta
+				if area["tick"] <= 0.0:
+					area["tick"] = cfg_a["acid_interval"]
+					for enemy in GameData.red_units.duplicate():
+						if is_instance_valid(enemy) and enemy.global_position.distance_to(area["pos"]) <= area["radius"]:
+							enemy.take_damage(cfg_a["acid_damage"])
+			if area["timer"] <= 0.0:
+				GameData.bomb_areas.remove_at(i)
 		queue_redraw()
 	# Victory: survive time
 	if GameData.game_phase == GameData.GamePhase.PLAYING:
@@ -1009,6 +1102,21 @@ func _draw() -> void:
 	for effect in _dash_effects:
 		var da: float = effect["timer"] / 0.4
 		draw_line(effect["start"], effect["end"], Color(1.0, 0.5, 0.0, da * 0.6), 3.0)
+
+	# Napalm beams (recorrido del dash)
+	for beam in _napalm_beams:
+		var nfade: float = clampf(beam["timer"], 0.0, 1.0)
+		var nw: float = GameData.ability_config["napalm_width"]
+		draw_line(beam["start"], beam["end"], Color(1.0, 0.35, 0.1, 0.25 * nfade), nw * 2.0)
+		draw_line(beam["start"], beam["end"], Color(1.0, 0.7, 0.2, 0.35 * nfade), nw * 0.6)
+
+	# Bomb areas (acido / adrenalina / nitrogeno)
+	for area in GameData.bomb_areas:
+		var ac: Color = AREA_COLORS[area["type"]]
+		# fade en el ultimo segundo
+		var fade: float = clampf(area["timer"], 0.0, 1.0)
+		draw_circle(area["pos"], area["radius"], Color(ac.r, ac.g, ac.b, 0.12 * fade))
+		draw_arc(area["pos"], area["radius"], 0, TAU, 24, Color(ac.r, ac.g, ac.b, 0.5 * fade), 1.5)
 
 	# Bomb explosions
 	for effect in _bomb_effects:

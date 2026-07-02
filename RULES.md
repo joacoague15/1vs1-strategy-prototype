@@ -84,6 +84,7 @@ Las unidades no pueden superponerse. Distancia minima entre centros: 32px. Si al
 - **STOP WAVE**: cancela la batalla actual, resetea todas las tropas a su posicion
 - **Boton velocidad**: cicla x1 / x2 / x4 (usa Engine.time_scale)
 - **F1**: abre/cierra panel de debug para modificar stats de unidades en runtime
+- **F7**: abre/cierra panel de mejoras de poderes (marine/hellbat/medic: activar/desactivar y configurar cada mejora)
 - **Reiniciar**: borra todo y vuelve a ronda 1 con oro inicial
 
 ## Archivos del proyecto

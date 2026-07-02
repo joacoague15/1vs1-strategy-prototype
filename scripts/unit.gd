@@ -9,6 +9,7 @@ var current_hp: float = 100.0
 var damage: float = 10.0
 var fire_rate: float = 1.0
 var attack_range: float = 200.0
+var vision_range: float = 800.0  # rango al que ve enemigos/heridos y va a buscarlos
 var move_speed: float = 56.0
 var fire_cooldown: float = 0.0
 var target: Node2D = null
@@ -19,6 +20,12 @@ var bonus_vs_heavy: float = 0.0
 var shield_hp: float = 0.0
 var shield_timer: float = 0.0
 var _bomb_cd: float = 0.0
+var _bomb_shots: int = 0  # cargas gastadas antes del cooldown (mejora cantidad)
+var _stim_timer: float = 0.0  # buff de adrenalina restante
+var _speed_mult: float = 1.0  # multiplicador de velocidad mov/ataque (stim/slow)
+var _atk_mult: float = 1.0  # multiplicador de velocidad de ataque (incluye buff de curacion)
+var _stun_timer: float = 0.0  # paralizado por embestida del hellbat
+var _heal_atk_timer: float = 0.0  # buff de ataque mientras te cura un medic
 var _dash_cd: float = 0.0
 var _medic_cd: float = 0.0
 var _ability_ready_flash: float = 0.0
@@ -79,6 +86,7 @@ func _ready() -> void:
 	current_hp = max_hp
 	damage = data["damage"]
 	attack_range = data["attack_range"] * GameData.TILE_SIZE
+	vision_range = data.get("vision_range", 8.0) * GameData.TILE_SIZE
 	fire_rate = data["fire_rate"]
 	move_speed = data["move_speed"]
 	unit_cost = data["cost"]
@@ -102,6 +110,7 @@ func reload_stats() -> void:
 		current_hp = clampf(current_hp * (max_hp / old_max_hp), 1.0, max_hp)
 	damage = data["damage"]
 	attack_range = data["attack_range"] * GameData.TILE_SIZE
+	vision_range = data.get("vision_range", 8.0) * GameData.TILE_SIZE
 	fire_rate = data["fire_rate"]
 	move_speed = data["move_speed"]
 	unit_cost = data["cost"]
@@ -121,6 +130,38 @@ func _process(delta: float) -> void:
 
 	fire_cooldown -= delta
 
+	# ponytail: buffs/debuffs de areas de bomba — pocas areas a la vez, scan lineal
+	var mult := 1.0
+	for area in GameData.bomb_areas:
+		if global_position.distance_to(area["pos"]) > area["radius"]:
+			continue
+		if area["type"] == "stim" and team == GameData.Team.BLUE:
+			_stim_timer = GameData.ability_config["stim_duration"]
+		elif area["type"] == "slow" and team == GameData.Team.RED:
+			mult = 1.0 - GameData.ability_config["slow_amount"]
+	if _stim_timer > 0.0:
+		_stim_timer -= delta
+		mult *= 1.0 + GameData.ability_config["stim_bonus"]
+	# Mejora movimiento medic: sprint si hay un aliado herido cerca
+	if team == GameData.Team.BLUE and unit_type == GameData.UnitType.CHARLIE \
+	and GameData.ability_config["medic_upgrade_sprint"]:
+		for ally in GameData.blue_units:
+			if ally != self and is_instance_valid(ally) \
+			and ally.current_hp < ally.max_hp * GameData.ability_config["medic_sprint_hp_pct"] \
+			and global_position.distance_to(ally.global_position) <= GameData.ability_config["medic_sprint_range"]:
+				mult *= 1.0 + GameData.ability_config["medic_sprint_bonus"]
+				break
+	mult = maxf(mult, 0.05)
+	# Mejora ataque medic: velocidad de ataque extra mientras te curan
+	var amult := mult
+	if _heal_atk_timer > 0.0:
+		_heal_atk_timer -= delta
+		amult *= 1.0 + GameData.ability_config["medic_atk_bonus"]
+	_atk_mult = amult
+	if mult != _speed_mult:
+		_speed_mult = mult
+		queue_redraw()
+
 	# ponytail: passive regen for blue units
 	if team == GameData.Team.BLUE and current_hp < max_hp:
 		current_hp = minf(current_hp + GameData.ability_config["blue_regen"] * delta, max_hp)
@@ -130,14 +171,19 @@ func _process(delta: float) -> void:
 	if forced_target != null and not is_instance_valid(forced_target):
 		forced_target = null
 
-	if team == GameData.Team.RED:
+	if _stun_timer > 0.0:
+		# Paralizado: no se mueve ni ataca hasta que expire
+		_stun_timer -= delta
+		if _stun_timer <= 0.0:
+			queue_redraw()
+	elif team == GameData.Team.RED:
 		# ponytail: red always attacks from spawn, no idle/launch flow
 		target = _find_closest_enemy()
 		if target and global_position.distance_to(target.global_position) <= attack_range:
 			# In range: stop pushing forward, but still separate (spread the line).
 			if fire_cooldown <= 0.0:
 				_shoot()
-				fire_cooldown = fire_rate
+				fire_cooldown = fire_rate / _atk_mult
 			_move_with_separation(Vector2.ZERO, delta)
 		elif target:
 			var dir := (target.global_position - global_position).normalized()
@@ -170,9 +216,9 @@ func _process(delta: float) -> void:
 								fighting = true
 								if fire_cooldown <= 0.0:
 									_shoot()
-									fire_cooldown = fire_rate
-							elif flame_arc > 0.0 and dist_to_target <= GameData.TILE_SIZE * 6.0:
-								# ponytail: hellbat aggro — chase enemies on the path, max 6 tiles
+									fire_cooldown = fire_rate / _atk_mult
+							elif dist_to_target <= vision_range:
+								# aggro: perseguir enemigos vistos en el camino
 								chase_dir = (target.global_position - global_position).normalized()
 				if fighting:
 					_move_with_separation(Vector2.ZERO, delta)
@@ -183,8 +229,8 @@ func _process(delta: float) -> void:
 					_move_with_separation(dir, delta)
 		elif unit_type == GameData.UnitType.CHARLIE:
 			_heal_tick(delta)
-			# ponytail: idle medic walks toward injured allies
-			var chase := _find_ally_target(true, true)
+			# ponytail: idle medic walks toward injured allies within vision range
+			var chase := _find_ally_target(true, vision_range)
 			if chase and global_position.distance_to(chase.global_position) > attack_range:
 				_move_with_separation((chase.global_position - global_position).normalized(), delta)
 			else:
@@ -196,18 +242,23 @@ func _process(delta: float) -> void:
 			if dist_ft <= attack_range:
 				if fire_cooldown <= 0.0:
 					_shoot()
-					fire_cooldown = fire_rate
+					fire_cooldown = fire_rate / _atk_mult
 				_move_with_separation(Vector2.ZERO, delta)
 			else:
 				_move_with_separation((target.global_position - global_position).normalized(), delta)
 		else:
-			# Idle: auto-attack enemies in range
+			# Idle: ataca en rango, persigue enemigos dentro del rango de vision
 			target = _find_closest_enemy()
-			if target and global_position.distance_to(target.global_position) <= attack_range:
-				if fire_cooldown <= 0.0:
-					_shoot()
-					fire_cooldown = fire_rate
-			_move_with_separation(Vector2.ZERO, delta)
+			var idle_dir := Vector2.ZERO
+			if target:
+				var d := global_position.distance_to(target.global_position)
+				if d <= attack_range:
+					if fire_cooldown <= 0.0:
+						_shoot()
+						fire_cooldown = fire_rate / _atk_mult
+				elif d <= vision_range:
+					idle_dir = (target.global_position - global_position).normalized()
+			_move_with_separation(idle_dir, delta)
 
 	# --- Visual effect timers ---
 	var needs_redraw := false
@@ -290,7 +341,7 @@ func _move_with_separation(seek_dir: Vector2, delta: float) -> void:
 	# Hard push out of any base we're overlapping
 	vel += _base_push() * move_speed * 3.0
 	if vel != Vector2.ZERO:
-		position += vel * delta
+		position += vel * _speed_mult * delta
 
 
 # Push units out if they overlap a base's collision circle.
@@ -455,23 +506,48 @@ func _heal_tick(delta: float) -> void:
 		return
 	var cfg := GameData.ability_config
 	var ally := _find_ally_target(true)
+	# Mejora escudo: sin heridos, sobrecura a un aliado full de vida
+	if not ally and cfg["medic_upgrade_overheal"]:
+		ally = _find_overheal_ally()
 	if not ally:
 		return
 	_heal_cooldown = cfg["medic_heal_rate"]
-	ally.current_hp = minf(ally.current_hp + cfg["medic_heal_amount"], ally.max_hp)
+	if ally.current_hp < ally.max_hp:
+		ally.current_hp = minf(ally.current_hp + cfg["medic_heal_amount"], ally.max_hp)
+	elif cfg["medic_upgrade_overheal"]:
+		# ponytail: escudo por sobrecura sin duracion — dura hasta que lo consuman
+		ally.shield_hp = minf(ally.shield_hp + cfg["medic_heal_amount"], cfg["medic_overheal_max"])
+	# Mejora medicina: el medic se cura lo mismo que cura
+	if cfg["medic_upgrade_selfheal"]:
+		current_hp = minf(current_hp + cfg["medic_heal_amount"], max_hp)
+	# Mejora ataque: buff de velocidad de ataque mientras lo curan
+	if cfg["medic_upgrade_atk"]:
+		ally._heal_atk_timer = cfg["medic_heal_rate"] + 0.2
 	ally.queue_redraw()
 	_heal_line_timer = SHOT_LINE_DURATION
 	_heal_line_target_pos = ally.global_position
 
 
-func _find_ally_target(require_injured: bool, any_range: bool = false) -> Node2D:
-	var best: Node2D = null
-	var best_ratio: float = INF
-	var heal_range: float = attack_range
+func _find_overheal_ally() -> Node2D:
+	var cfg := GameData.ability_config
 	for ally in GameData.blue_units:
 		if ally == self or not is_instance_valid(ally):
 			continue
-		if not any_range and global_position.distance_to(ally.global_position) > heal_range:
+		if global_position.distance_to(ally.global_position) > attack_range:
+			continue
+		if ally.shield_hp < cfg["medic_overheal_max"]:
+			return ally
+	return null
+
+
+func _find_ally_target(require_injured: bool, search_range: float = 0.0) -> Node2D:
+	var best: Node2D = null
+	var best_ratio: float = INF
+	var heal_range: float = attack_range if search_range <= 0.0 else search_range
+	for ally in GameData.blue_units:
+		if ally == self or not is_instance_valid(ally):
+			continue
+		if global_position.distance_to(ally.global_position) > heal_range:
 			continue
 		if require_injured and ally.current_hp >= ally.max_hp:
 			continue
@@ -506,6 +582,10 @@ func _draw() -> void:
 	# ponytail: selection ring for blue units
 	if selected:
 		draw_arc(Vector2.ZERO, half + 2.0, 0, TAU, 16, Color(1, 1, 0, 0.85), 1.5)
+		# Rango de vision (verde para el medic que va a curar, celeste para atacantes)
+		var vc := Color(0.3, 1.0, 0.5, 0.25) if (team == GameData.Team.BLUE and unit_type == GameData.UnitType.CHARLIE) \
+			else Color(0.4, 0.9, 1.0, 0.25)
+		draw_arc(Vector2.ZERO, vision_range, 0, TAU, 64, vc, 1.0)
 
 	# Unit letter
 	var font := ThemeDB.fallback_font
@@ -529,6 +609,16 @@ func _draw() -> void:
 		draw_arc(Vector2.ZERO, half + 4.0, 0, TAU, 16, Color(0.3, 0.7, 1.0, 0.6), 1.5)
 		var shield_ratio := clampf(shield_hp / maxf(GameData.ability_config["medic_shield_amount"], 1.0), 0.0, 1.0)
 		draw_rect(Rect2(-bar_w / 2.0, bar_y - 3.0, bar_w * shield_ratio, bar_h), Color(0.3, 0.7, 1.0))
+
+	# --- Stun indicator ---
+	if _stun_timer > 0.0:
+		draw_arc(Vector2.ZERO, half + 3.0, 0, TAU, 6, Color(0.95, 0.95, 0.6, 0.85), 1.5)
+
+	# --- Stim / slow indicators ---
+	if _stim_timer > 0.0:
+		draw_arc(Vector2.ZERO, half + 3.0, 0, TAU, 16, Color(1.0, 0.9, 0.2, 0.7), 1.2)
+	elif _speed_mult < 1.0:
+		draw_arc(Vector2.ZERO, half + 3.0, 0, TAU, 16, Color(0.5, 0.8, 1.0, 0.7), 1.2)
 
 	# --- Ability ready flash ---
 	if _ability_ready_flash > 0.0:

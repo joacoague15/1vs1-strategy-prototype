@@ -34,6 +34,8 @@ var victory_message: String = ""
 
 # Level config
 var current_level_name: String = ""
+var level_difficulty: String = "facil"  # facil | mediana | dificil
+var level_credits: int = 100  # creditos que otorga ganar la mision
 var base_config := {
 	"blue_hp": 300.0,
 	"blue_damage": 30.0,
@@ -64,7 +66,66 @@ var ability_config := {
 	"medic_shield_amount": 200.0,
 	"medic_shield_duration": 6.0,
 	"blue_regen": 1.0,
+	# Mejoras de la bomba del marine (combinables, panel F7)
+	"bomb_upgrade_count": false,
+	"bomb_charges": 2,
+	"bomb_upgrade_acid": false,
+	"acid_duration": 6.0,
+	"acid_damage": 20.0,
+	"acid_interval": 1.0,
+	"bomb_upgrade_stim": false,
+	"stim_duration": 6.0,
+	"stim_bonus": 0.4,
+	"bomb_upgrade_slow": false,
+	"slow_duration": 6.0,
+	"slow_amount": 0.5,
+	"bomb_upgrade_circuit": false,
+	"circuit_delay": 0.6,
+	"circuit_fraction": 0.5,
+	# Mejoras del dash del hellbat (combinables, panel F7)
+	"dash_upgrade_stun": false,
+	"stun_radius": 80.0,
+	"stun_duration": 2.0,
+	"dash_upgrade_shield": false,
+	"dash_shield_amount": 60.0,
+	"dash_shield_duration": 6.0,
+	"dash_upgrade_napalm": false,
+	"napalm_duration": 6.0,
+	"napalm_dps_light": 25.0,
+	"napalm_dps_heavy": 15.0,
+	"napalm_width": 15.0,
+	# Mejoras del medic (combinables, panel F7)
+	"medic_upgrade_selfheal": false,
+	"medic_upgrade_atk": false,
+	"medic_atk_bonus": 0.2,
+	"medic_upgrade_sprint": false,
+	"medic_sprint_range": 200.0,
+	"medic_sprint_bonus": 0.4,
+	"medic_sprint_hp_pct": 0.5,
+	"medic_upgrade_overheal": false,
+	"medic_overheal_max": 50.0,
 }
+
+# Claves de ability_config que pertenecen a las mejoras de poderes:
+# se persisten en data/upgrades.json (Apply del panel F7), no en units.json
+const UPGRADE_KEYS := [
+	"bomb_upgrade_count", "bomb_charges",
+	"bomb_upgrade_acid", "acid_duration", "acid_damage", "acid_interval",
+	"bomb_upgrade_stim", "stim_duration", "stim_bonus",
+	"bomb_upgrade_slow", "slow_duration", "slow_amount",
+	"bomb_upgrade_circuit", "circuit_delay", "circuit_fraction",
+	"dash_upgrade_stun", "stun_radius", "stun_duration",
+	"dash_upgrade_shield", "dash_shield_amount", "dash_shield_duration",
+	"dash_upgrade_napalm", "napalm_duration", "napalm_dps_light", "napalm_dps_heavy", "napalm_width",
+	"medic_upgrade_selfheal",
+	"medic_upgrade_atk", "medic_atk_bonus",
+	"medic_upgrade_sprint", "medic_sprint_range", "medic_sprint_bonus", "medic_sprint_hp_pct",
+	"medic_upgrade_overheal", "medic_overheal_max",
+]
+
+# Areas activas dejadas por bombas: [{type, pos, radius, timer, tick}]
+# ponytail: viven aca para que unit.gd las consulte sin referenciar main
+var bomb_areas: Array = []
 
 # ponytail: wave spawning config
 var wave_config := {
@@ -100,7 +161,33 @@ const _TYPE_MAP := {"ALPHA": UnitType.ALPHA, "BRAVO": UnitType.BRAVO, "CHARLIE":
 
 func _ready() -> void:
 	_load_units_json()
+	_load_upgrades_json()
 	_load_zones_json()
+
+
+func _load_upgrades_json() -> void:
+	# ponytail: retry como units.json — OneDrive puede lockear el archivo
+	var parsed = null
+	for attempt in 3:
+		var file := FileAccess.open("res://data/upgrades.json", FileAccess.READ)
+		if file:
+			parsed = JSON.parse_string(file.get_as_text())
+			if parsed != null:
+				break
+	if parsed == null:
+		return  # sin archivo: quedan los defaults
+	for key in parsed:
+		if ability_config.has(key):
+			ability_config[key] = parsed[key]
+
+
+func save_upgrades_json() -> void:
+	var out := {}
+	for key in UPGRADE_KEYS:
+		out[key] = ability_config[key]
+	var file := FileAccess.open("res://data/upgrades.json", FileAccess.WRITE)
+	if file:
+		file.store_string(JSON.stringify(out, "\t"))
 
 
 func _load_units_json() -> void:
@@ -247,7 +334,10 @@ func unregister_unit(unit: Node, team: Team) -> void:
 const _TYPE_NAME_MAP := {UnitType.ALPHA: "ALPHA", UnitType.BRAVO: "BRAVO", UnitType.CHARLIE: "CHARLIE"}
 
 func save_units_json() -> void:
-	var out := {"red": {}, "blue": {}, "abilities": ability_config.duplicate(), "waves": wave_config.duplicate()}
+	var abilities := ability_config.duplicate()
+	for key in UPGRADE_KEYS:
+		abilities.erase(key)
+	var out := {"red": {}, "blue": {}, "abilities": abilities, "waves": wave_config.duplicate()}
 	for unit_type in _TYPE_NAME_MAP:
 		var key: String = _TYPE_NAME_MAP[unit_type]
 		for pair in [["red", RED_UNITS], ["blue", BLUE_UNITS]]:
@@ -298,6 +388,7 @@ func reset_game() -> void:
 	red_units.clear()
 	blue_units.clear()
 	_spatial_grid.clear()
+	bomb_areas.clear()
 	blue_base = null
 	red_bases.clear()
 	rounds_survived = 0
@@ -365,6 +456,8 @@ func save_level(level_name: String) -> bool:
 		"name": level_name,
 		"victory_condition": _VICTORY_NAMES[victory_condition],
 		"victory_param": victory_param,
+		"difficulty": level_difficulty,
+		"credits": level_credits,
 		"units": _serialize_units(),
 		"terrain": _serialize_terrain(),
 		"waves": wave_config.duplicate(),
@@ -403,6 +496,8 @@ func _apply_level_data(data: Dictionary) -> bool:
 	var vc_name: String = data.get("victory_condition", "NONE")
 	victory_condition = _VICTORY_FROM_NAME.get(vc_name, VictoryCondition.NONE)
 	victory_param = data.get("victory_param", 10.0)
+	level_difficulty = data.get("difficulty", "facil")
+	level_credits = int(data.get("credits", 100))
 
 	# Units
 	if data.has("units"):

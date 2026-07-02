@@ -44,6 +44,12 @@ var _ability_spinboxes: Dictionary = {}
 var _ability_dragging: bool = false
 var _ability_drag_offset: Vector2 = Vector2.ZERO
 
+# Bomb upgrades panel (F7)
+var upgrade_panel: PanelContainer
+var _ability_checkboxes: Dictionary = {}  # config_key -> CheckButton
+var _upgrade_dragging: bool = false
+var _upgrade_drag_offset: Vector2 = Vector2.ZERO
+
 # Wave config panel (F5)
 var wave_panel: PanelContainer
 var _wave_spinboxes: Dictionary = {}
@@ -58,6 +64,8 @@ var _level_name_input: LineEdit
 var _level_victory_btn: OptionButton
 var _level_victory_param: SpinBox
 var _level_victory_param_row: HBoxContainer
+var _level_difficulty_btn: OptionButton
+var _level_credits: SpinBox
 var _level_red_bases_btn: CheckButton
 var _level_red_base_hp: SpinBox
 var _level_red_base_dmg: SpinBox
@@ -89,6 +97,7 @@ func _ready() -> void:
 	_build_debug_panel(root)
 	_build_ability_panel(root)
 	_build_wave_panel(root)
+	_build_upgrade_panel(root)
 	_build_level_panel(root)
 	_build_progress_label(root)
 
@@ -391,19 +400,21 @@ func _build_debug_panel(root: Control) -> void:
 	unit_row.add_child(debug_unit_btn)
 
 	# Stat spinboxes
-	var stats := ["hp", "damage", "bonus_vs_light", "bonus_vs_heavy", "attack_range", "move_speed", "fire_rate", "flame_arc"]
+	var stats := ["hp", "damage", "bonus_vs_light", "bonus_vs_heavy", "attack_range", "vision_range", "move_speed", "fire_rate", "flame_arc"]
 	var labels := {
 		"hp": "HP", "damage": "Damage", "bonus_vs_light": "Bonus vs Light",
 		"bonus_vs_heavy": "Bonus vs Heavy", "attack_range": "Range (tiles)",
+		"vision_range": "Vision (tiles)",
 		"move_speed": "Speed", "fire_rate": "Fire Rate (s)", "flame_arc": "Flame Arc (deg)"
 	}
 	var steps := {
 		"hp": 5.0, "damage": 1.0, "bonus_vs_light": 1.0, "bonus_vs_heavy": 1.0,
-		"attack_range": 0.1, "move_speed": 5.0, "fire_rate": 0.1, "flame_arc": 5.0
+		"attack_range": 0.1, "vision_range": 0.5, "move_speed": 5.0, "fire_rate": 0.1, "flame_arc": 5.0
 	}
 	var ranges := {
 		"hp": [1.0, 999.0], "damage": [0.0, 200.0], "bonus_vs_light": [0.0, 100.0],
 		"bonus_vs_heavy": [0.0, 100.0], "attack_range": [0.1, 10.0],
+		"vision_range": [0.5, 20.0],
 		"move_speed": [0.0, 500.0], "fire_rate": [0.05, 10.0], "flame_arc": [10.0, 360.0]
 	}
 
@@ -474,6 +485,11 @@ func _unhandled_input(event: InputEvent) -> void:
 			level_panel.visible = not level_panel.visible
 			if level_panel.visible:
 				_refresh_level_panel()
+			get_viewport().set_input_as_handled()
+		elif event.keycode == KEY_F7:
+			upgrade_panel.visible = not upgrade_panel.visible
+			if upgrade_panel.visible:
+				_refresh_ability_panel()
 			get_viewport().set_input_as_handled()
 
 
@@ -644,6 +660,8 @@ func _refresh_ability_panel() -> void:
 		_ability_key_btns[key].text = OS.get_keycode_string(cfg[key])
 	for key in _ability_spinboxes:
 		_ability_spinboxes[key].value = cfg[key]
+	for key in _ability_checkboxes:
+		_ability_checkboxes[key].button_pressed = cfg[key]
 
 
 func _on_ability_title_input(event: InputEvent) -> void:
@@ -655,6 +673,131 @@ func _on_ability_title_input(event: InputEvent) -> void:
 			_ability_dragging = false
 	elif event is InputEventMouseMotion and _ability_dragging:
 		ability_panel.position = event.global_position + _ability_drag_offset
+
+
+# --- Bomb upgrades panel (F7) ---
+
+func _build_upgrade_panel(root: Control) -> void:
+	upgrade_panel = PanelContainer.new()
+	upgrade_panel.position = Vector2(250, 20)
+	upgrade_panel.visible = false
+	root.add_child(upgrade_panel)
+
+	var vbox := VBoxContainer.new()
+	vbox.add_theme_constant_override("separation", 4)
+	upgrade_panel.add_child(vbox)
+
+	var title := Label.new()
+	title.text = "MEJORAS PODERES (F7)"
+	title.add_theme_font_size_override("font_size", 14)
+	title.add_theme_color_override("font_color", Color(1.0, 0.7, 0.3))
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.mouse_filter = Control.MOUSE_FILTER_STOP
+	title.gui_input.connect(_on_upgrade_title_input)
+	vbox.add_child(title)
+
+	var cols := HBoxContainer.new()
+	cols.add_theme_constant_override("separation", 16)
+	vbox.add_child(cols)
+
+	var marine_col := VBoxContainer.new()
+	marine_col.add_theme_constant_override("separation", 4)
+	cols.add_child(marine_col)
+	var hellbat_col := VBoxContainer.new()
+	hellbat_col.add_theme_constant_override("separation", 4)
+	cols.add_child(hellbat_col)
+	var medic_col := VBoxContainer.new()
+	medic_col.add_theme_constant_override("separation", 4)
+	cols.add_child(medic_col)
+
+	# --- Marine (bomba) ---
+	_add_section_label(marine_col, "MARINE — Cantidad", Color(1.0, 0.9, 0.5))
+	_add_ability_checkbox(marine_col, "bomb_upgrade_count", "Activa")
+	_add_ability_spinbox(marine_col, "bomb_charges", "Bombas:", 1.0, 10.0, 1.0)
+
+	_add_section_label(marine_col, "Acido", Color(0.4, 0.9, 0.2))
+	_add_ability_checkbox(marine_col, "bomb_upgrade_acid", "Activa")
+	_add_ability_spinbox(marine_col, "acid_duration", "Duracion:", 1.0, 60.0, 0.5)
+	_add_ability_spinbox(marine_col, "acid_damage", "Daño/tick:", 1.0, 200.0, 5.0)
+	_add_ability_spinbox(marine_col, "acid_interval", "Intervalo:", 0.1, 5.0, 0.1)
+
+	_add_section_label(marine_col, "Adrenalina", Color(1.0, 0.9, 0.2))
+	_add_ability_checkbox(marine_col, "bomb_upgrade_stim", "Activa")
+	_add_ability_spinbox(marine_col, "stim_duration", "Duracion:", 1.0, 60.0, 0.5)
+	_add_ability_spinbox(marine_col, "stim_bonus", "Bonus:", 0.05, 2.0, 0.05)
+
+	_add_section_label(marine_col, "Ralentizar", Color(0.5, 0.8, 1.0))
+	_add_ability_checkbox(marine_col, "bomb_upgrade_slow", "Activa")
+	_add_ability_spinbox(marine_col, "slow_duration", "Duracion:", 1.0, 60.0, 0.5)
+	_add_ability_spinbox(marine_col, "slow_amount", "Reduccion:", 0.05, 0.95, 0.05)
+
+	_add_section_label(marine_col, "Circuitos", Color(0.9, 0.5, 0.9))
+	_add_ability_checkbox(marine_col, "bomb_upgrade_circuit", "Activa")
+	_add_ability_spinbox(marine_col, "circuit_delay", "Retraso:", 0.1, 5.0, 0.1)
+	_add_ability_spinbox(marine_col, "circuit_fraction", "Fraccion daño:", 0.05, 1.0, 0.05)
+
+	# --- Hellbat (dash) ---
+	_add_section_label(hellbat_col, "HELLBAT — Embestida", Color(0.9, 0.5, 0.2))
+	_add_ability_checkbox(hellbat_col, "dash_upgrade_stun", "Activa")
+	_add_ability_spinbox(hellbat_col, "stun_radius", "Radio:", 10.0, 300.0, 10.0)
+	_add_ability_spinbox(hellbat_col, "stun_duration", "Paralisis seg:", 0.5, 10.0, 0.5)
+
+	_add_section_label(hellbat_col, "Defensa", Color(0.3, 0.7, 1.0))
+	_add_ability_checkbox(hellbat_col, "dash_upgrade_shield", "Activa")
+	_add_ability_spinbox(hellbat_col, "dash_shield_amount", "Escudo HP:", 10.0, 500.0, 10.0)
+	_add_ability_spinbox(hellbat_col, "dash_shield_duration", "Duracion:", 1.0, 30.0, 0.5)
+
+	_add_section_label(hellbat_col, "Napalm", Color(1.0, 0.4, 0.1))
+	_add_ability_checkbox(hellbat_col, "dash_upgrade_napalm", "Activa")
+	_add_ability_spinbox(hellbat_col, "napalm_duration", "Duracion:", 1.0, 60.0, 0.5)
+	_add_ability_spinbox(hellbat_col, "napalm_dps_light", "Daño/s light:", 1.0, 200.0, 5.0)
+	_add_ability_spinbox(hellbat_col, "napalm_dps_heavy", "Daño/s armor:", 1.0, 200.0, 5.0)
+	_add_ability_spinbox(hellbat_col, "napalm_width", "Ancho:", 5.0, 100.0, 5.0)
+
+	# --- Medic ---
+	_add_section_label(medic_col, "MEDIC — Medicina", Color(0.2, 0.8, 0.4))
+	_add_ability_checkbox(medic_col, "medic_upgrade_selfheal", "Activa")
+
+	_add_section_label(medic_col, "Ataque", Color(1.0, 0.6, 0.6))
+	_add_ability_checkbox(medic_col, "medic_upgrade_atk", "Activa")
+	_add_ability_spinbox(medic_col, "medic_atk_bonus", "Bonus:", 0.05, 2.0, 0.05)
+
+	_add_section_label(medic_col, "Movimiento", Color(0.6, 1.0, 0.6))
+	_add_ability_checkbox(medic_col, "medic_upgrade_sprint", "Activa")
+	_add_ability_spinbox(medic_col, "medic_sprint_range", "Rango:", 30.0, 600.0, 10.0)
+	_add_ability_spinbox(medic_col, "medic_sprint_bonus", "Bonus:", 0.05, 2.0, 0.05)
+	_add_ability_spinbox(medic_col, "medic_sprint_hp_pct", "Umbral HP:", 0.05, 1.0, 0.05)
+
+	_add_section_label(medic_col, "Escudo", Color(0.4, 0.8, 1.0))
+	_add_ability_checkbox(medic_col, "medic_upgrade_overheal", "Activa")
+	_add_ability_spinbox(medic_col, "medic_overheal_max", "Escudo max:", 10.0, 500.0, 10.0)
+
+	var apply_btn := Button.new()
+	apply_btn.text = "Apply"
+	apply_btn.custom_minimum_size = Vector2(120, 30)
+	apply_btn.pressed.connect(func(): GameData.save_upgrades_json())
+	vbox.add_child(apply_btn)
+
+
+func _add_ability_checkbox(parent: Control, key: String, label: String) -> void:
+	var cb := CheckButton.new()
+	cb.text = label
+	cb.add_theme_font_size_override("font_size", 12)
+	cb.button_pressed = GameData.ability_config[key]
+	cb.toggled.connect(func(on: bool): GameData.ability_config[key] = on)
+	parent.add_child(cb)
+	_ability_checkboxes[key] = cb
+
+
+func _on_upgrade_title_input(event: InputEvent) -> void:
+	if event is InputEventMouseButton and event.button_index == MOUSE_BUTTON_LEFT:
+		if event.pressed:
+			_upgrade_dragging = true
+			_upgrade_drag_offset = upgrade_panel.position - event.global_position
+		else:
+			_upgrade_dragging = false
+	elif event is InputEventMouseMotion and _upgrade_dragging:
+		upgrade_panel.position = event.global_position + _upgrade_drag_offset
 
 
 # --- Wave config panel (F5) ---
@@ -889,6 +1032,28 @@ func _build_level_panel(root: Control) -> void:
 	_level_victory_param.custom_minimum_size = Vector2(90, 26)
 	_level_victory_param_row.add_child(_level_victory_param)
 
+	# --- Mision: dificultad y recompensa ---
+	_add_section_label(vbox, "Mision", Color(1.0, 0.7, 0.3))
+
+	var diff_row := HBoxContainer.new()
+	diff_row.add_theme_constant_override("separation", 4)
+	vbox.add_child(diff_row)
+
+	var diff_lbl := Label.new()
+	diff_lbl.text = "Dificultad:"
+	diff_lbl.add_theme_font_size_override("font_size", 12)
+	diff_lbl.custom_minimum_size = Vector2(80, 0)
+	diff_row.add_child(diff_lbl)
+
+	_level_difficulty_btn = OptionButton.new()
+	_level_difficulty_btn.add_item("Facil", 0)
+	_level_difficulty_btn.add_item("Mediana", 1)
+	_level_difficulty_btn.add_item("Dificil", 2)
+	_level_difficulty_btn.custom_minimum_size = Vector2(180, 26)
+	diff_row.add_child(_level_difficulty_btn)
+
+	_level_credits = _add_level_spinbox(vbox, "Creditos:", 0, 100000, 10, GameData.level_credits)
+
 	# --- Base config ---
 	_add_section_label(vbox, "Config Base Azul", Color(0.3, 0.5, 1.0))
 	_level_blue_base_hp = _add_level_spinbox(vbox, "HP:", 50, 5000, 50, GameData.base_config["blue_hp"])
@@ -1005,6 +1170,8 @@ func _on_apply_level_config() -> void:
 	GameData.victory_condition = vc_map[vc_idx]
 	GameData.victory_param = _level_victory_param.value
 	GameData.current_level_name = _level_name_input.text
+	GameData.level_difficulty = ["facil", "mediana", "dificil"][_level_difficulty_btn.selected]
+	GameData.level_credits = int(_level_credits.value)
 
 	# Base config
 	GameData.base_config["blue_hp"] = _level_blue_base_hp.value
@@ -1056,6 +1223,10 @@ func _refresh_level_panel() -> void:
 	_level_victory_btn.selected = vc_map.get(GameData.victory_condition, 0)
 	_level_victory_param.value = GameData.victory_param
 	_on_victory_type_changed(_level_victory_btn.selected)
+
+	# Mision
+	_level_difficulty_btn.selected = {"facil": 0, "mediana": 1, "dificil": 2}.get(GameData.level_difficulty, 0)
+	_level_credits.value = GameData.level_credits
 
 	# Base config
 	_level_blue_base_hp.value = GameData.base_config["blue_hp"]

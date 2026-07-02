@@ -33,7 +33,8 @@
 			"hp": 301.0,
 			"letter": "M",
 			"move_speed": 95.0,
-			"name": "Marine"
+			"name": "Marine",
+			"vision_range": 8.0
 		},
 		"BRAVO": {
 			"armor_type": "heavy",
@@ -51,7 +52,8 @@
 			"hp": 451.0,
 			"letter": "F",
 			"move_speed": 85.0,
-			"name": "Firebat"
+			"name": "Firebat",
+			"vision_range": 8.0
 		},
 		"CHARLIE": {
 			"armor_type": "light",
@@ -67,7 +69,8 @@
 			"hp": 301.0,
 			"letter": "+",
 			"move_speed": 80.0,
-			"name": "Medic"
+			"name": "Medic",
+			"vision_range": 8.0
 		}
 	},
 	"red": {
@@ -124,10 +127,10 @@
 		}
 	},
 	"waves": {
-		"alpha_count": 0.0,
+		"alpha_count": 1.0,
 		"auto": true,
-		"bravo_count": 2.0,
+		"bravo_count": 0.0,
 		"charlie_count": 0.0,
-		"interval": 8.0
+		"interval": 20.0
 	}
 }

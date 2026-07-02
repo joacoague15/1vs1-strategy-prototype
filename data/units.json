@@ -20,7 +20,7 @@
 	"blue": {
 		"ALPHA": {
 			"armor_type": "light",
-			"attack_range": 1.5,
+			"attack_range": 2.0,
 			"bonus_vs_heavy": 6.0,
 			"color": [
 				0.3,
@@ -34,7 +34,7 @@
 			"letter": "M",
 			"move_speed": 95.0,
 			"name": "Marine",
-			"vision_range": 8.0
+			"vision_range": 1.0
 		},
 		"BRAVO": {
 			"armor_type": "heavy",
@@ -53,7 +53,7 @@
 			"letter": "F",
 			"move_speed": 85.0,
 			"name": "Firebat",
-			"vision_range": 8.0
+			"vision_range": 2.0
 		},
 		"CHARLIE": {
 			"armor_type": "light",
@@ -70,7 +70,7 @@
 			"letter": "+",
 			"move_speed": 80.0,
 			"name": "Medic",
-			"vision_range": 8.0
+			"vision_range": 2.0
 		}
 	},
 	"red": {

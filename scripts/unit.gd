@@ -78,7 +78,49 @@ const LANE_DIRECTIONS := {
 }
 
 
+# Silueta geometrica de la unidad (poligono en coords locales)
+var _shape: PackedVector2Array = PackedVector2Array()
+
+
+func _build_shape() -> void:
+	var h := GameData.BLUE_CELL_SIZE * 0.4
+	var pts := PackedVector2Array()
+	if team == GameData.Team.RED:
+		match unit_type:
+			GameData.UnitType.ALPHA:
+				# Zergling: estrella de 4 puntas (garras rapidas)
+				for i in 8:
+					var ang := -PI / 2.0 + float(i) * TAU / 8.0
+					var r := h * 1.15 if i % 2 == 0 else h * 0.42
+					pts.append(Vector2(cos(ang), sin(ang)) * r)
+			GameData.UnitType.BRAVO:
+				# Hydralisk: rombo alto (serpiente erguida)
+				pts = PackedVector2Array([Vector2(0, -h * 1.2), Vector2(h * 0.75, 0),
+					Vector2(0, h * 1.2), Vector2(-h * 0.75, 0)])
+			GameData.UnitType.CHARLIE:
+				# Roach: hexagono ancho (escarabajo blindado)
+				pts = PackedVector2Array([Vector2(-h * 1.1, 0), Vector2(-h * 0.55, -h * 0.85),
+					Vector2(h * 0.55, -h * 0.85), Vector2(h * 1.1, 0),
+					Vector2(h * 0.55, h * 0.85), Vector2(-h * 0.55, h * 0.85)])
+	else:
+		match unit_type:
+			GameData.UnitType.ALPHA:
+				# Marine: cuadrado (blindaje) con visor
+				pts = PackedVector2Array([Vector2(-h * 0.9, -h * 0.9), Vector2(h * 0.9, -h * 0.9),
+					Vector2(h * 0.9, h * 0.9), Vector2(-h * 0.9, h * 0.9)])
+			GameData.UnitType.BRAVO:
+				# Hellbat: triangulo (llama)
+				pts = PackedVector2Array([Vector2(0, -h * 1.15), Vector2(h, h * 0.9), Vector2(-h, h * 0.9)])
+			GameData.UnitType.CHARLIE:
+				# Medic: circulo con cruz
+				for i in 16:
+					var ang := float(i) * TAU / 16.0
+					pts.append(Vector2(cos(ang), sin(ang)) * h)
+	_shape = pts
+
+
 func _ready() -> void:
+	_build_shape()
 	var data: Dictionary = GameData.get_unit_data(
 		team as GameData.Team, unit_type as GameData.UnitType
 	)
@@ -570,14 +612,34 @@ func _draw() -> void:
 	)
 	var is_red := (team == GameData.Team.RED)
 	var half := GameData.BLUE_CELL_SIZE * 0.4
-	var sq := Rect2(-half, -half, half * 2, half * 2)
 
-	# Body
-	draw_rect(sq, body_color)
-
-	# Outline
+	# Body: silueta geometrica distintiva por unidad
+	draw_colored_polygon(_shape, body_color)
 	var outline_color := Color.WHITE if is_red else Color(0.3, 0.5, 1.0)
-	draw_rect(sq, outline_color, false, 0.9)
+	var outline_pts := _shape.duplicate()
+	outline_pts.append(_shape[0])
+	draw_polyline(outline_pts, outline_color, 0.9, true)
+
+	# Detalles distintivos
+	if is_red:
+		if unit_type == GameData.UnitType.CHARLIE:
+			# linea del caparazon del roach
+			draw_line(Vector2(0, -half * 0.85), Vector2(0, half * 0.85), body_color.darkened(0.45), 1.2)
+	else:
+		match unit_type:
+			GameData.UnitType.ALPHA:
+				# visor del casco del marine
+				draw_line(Vector2(-half * 0.5, -half * 0.25), Vector2(half * 0.5, -half * 0.25),
+					Color(0.08, 0.12, 0.2), 1.8)
+			GameData.UnitType.BRAVO:
+				# nucleo de llama del hellbat
+				draw_colored_polygon(PackedVector2Array([Vector2(0, -half * 0.3),
+					Vector2(half * 0.5, half * 0.7), Vector2(-half * 0.5, half * 0.7)]),
+					Color(1.0, 0.85, 0.3))
+			GameData.UnitType.CHARLIE:
+				# cruz medica
+				draw_rect(Rect2(-half * 0.2, -half * 0.65, half * 0.4, half * 1.3), Color.WHITE)
+				draw_rect(Rect2(-half * 0.65, -half * 0.2, half * 1.3, half * 0.4), Color.WHITE)
 
 	# ponytail: selection ring for blue units
 	if selected:
@@ -586,14 +648,6 @@ func _draw() -> void:
 		var vc := Color(0.3, 1.0, 0.5, 0.25) if (team == GameData.Team.BLUE and unit_type == GameData.UnitType.CHARLIE) \
 			else Color(0.4, 0.9, 1.0, 0.25)
 		draw_arc(Vector2.ZERO, vision_range, 0, TAU, 64, vc, 1.0)
-
-	# Unit letter
-	var font := ThemeDB.fallback_font
-	var letter: String = GameData.get_unit_letter(
-		team as GameData.Team, unit_type as GameData.UnitType
-	)
-	var text_size := font.get_string_size(letter, HORIZONTAL_ALIGNMENT_CENTER, -1, 7)
-	draw_string(font, Vector2(-text_size.x / 2.0, text_size.y / 4.0), letter, HORIZONTAL_ALIGNMENT_CENTER, -1, 7, Color.WHITE)
 
 	# HP bar
 	var bar_w := half * 2
@@ -629,7 +683,7 @@ func _draw() -> void:
 	# --- Damage flash ---
 	if _damage_flash_timer > 0.0:
 		var flash_alpha: float = _damage_flash_timer / DAMAGE_FLASH_DURATION
-		draw_rect(sq, Color(1.0, 0.85, 0.85, flash_alpha * 0.7))
+		draw_colored_polygon(_shape, Color(1.0, 0.85, 0.85, flash_alpha * 0.7))
 
 	# --- Ranged shot line ---
 	if _shot_timer > 0.0:
